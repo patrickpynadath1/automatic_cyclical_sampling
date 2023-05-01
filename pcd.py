@@ -41,6 +41,7 @@ def main(args):
     np.random.seed(args.seed)
 
     # load existing data
+    # uncomment this when done with data generating
     if args.data == "mnist" or args.data_file is not None:
         train_loader, test_loader, plot, viz = utils.get_data(args)
     # generate the dataset
@@ -124,9 +125,17 @@ def main(args):
         else:
             sampler = samplers.DiffSampler(model.data_dim, 1, approx=True, fixed_proposal=False, temp=2.)
     elif args.sampler == "dmala":
-            sampler = samplers.LangevinSampler(model.data_dim, 1, approx=True, fixed_proposal=False, temp=2., step_size=0.2,mh=True)
+            sampler = samplers.LangevinSampler(model.data_dim, 1, approx=True, fixed_proposal=False, temp=2., step_size=args.step_size,mh=True)
     elif args.sampler == "dula":
-            sampler = samplers.LangevinSampler(model.data_dim, 1, approx=True, fixed_proposal=False, temp=2., step_size=0.1,mh=False)
+            sampler = samplers.LangevinSampler(model.data_dim, 1, approx=True, fixed_proposal=False, temp=2., step_size=args.step_size,mh=False)
+    elif args.sampler == "cyc_dmala":
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim, n_steps=1, approx=True, fixed_proposal=False, temp=2.,
+                                                       initial_step_size=args.step_size * 2,mh=True,
+                                                       num_cycles=2, num_iters=args.sampling_steps)
+    elif args.sampler == "cyc_dula":
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim, num_cycles=2, n_steps=1, approx=True,
+                                                       fixed_proposal=False, temp=2.,
+                                                       initial_step_size=args.step_size * 2, mh=False, num_iters=args.sampling_steps)
          
     else:
         assert "gwg-" in args.sampler
@@ -153,7 +162,10 @@ def main(args):
             x = x[0].to(device)
 
             for k in range(args.sampling_steps):
-                buffer = sampler.step(buffer.detach(), model).detach()
+                if args.sampler in ['cyc_dula', 'cyc_dmala']:
+                    buffer = sampler.step(buffer.detach(), model, k)
+                else:
+                    buffer = sampler.step(buffer.detach(), model).detach()
 
             logp_real = model(x).squeeze().mean()
             logp_fake = model(buffer).squeeze().mean()
@@ -166,12 +178,15 @@ def main(args):
             optimizer.step()
             model.G.data *= (1. - torch.eye(model.G.data.size(0))).to(model.G)
 
+
             if itr % args.print_every == 0:
                 my_print("({}) log p(real) = {:.4f}, log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}".format(itr,
                                                                                               logp_real.item(),
                                                                                               logp_fake.item(),
                                                                                               obj.item(),
                                                                                               sampler._hops))
+                if args.sampler in ['cyc_dmala', 'cyc_dula']:
+                    print(sampler.step_size)
                 if args.model in ("lattice_potts", "lattice_ising"):
                     my_print("\tsigma true = {:.4f}, current sigma = {:.4f}".format(args.sigma,
                                                                                     model.sigma.data.item()))
@@ -221,9 +236,12 @@ def main(args):
                     with open("{}/sigma.txt".format(args.save_dir), 'w') as f:
                         f.write(str(final_sigma))
                 else:
-                    np.save("{}/sqerr_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,args.sampling_steps),sq_errs)
-                    np.save("{}/rmse_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,args.sampling_steps),rmses)
-                    np.save("{}/times_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,args.sampling_steps),time_list)
+                    np.save("{}/sqerr_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
+                                                              args.sampling_steps),sq_errs)
+                    np.save("{}/rmse_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
+                                                             args.sampling_steps),rmses)
+                    np.save("{}/times_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
+                                                              args.sampling_steps),time_list)
 
                 quit()
 
@@ -269,6 +287,7 @@ if __name__ == "__main__":
     parser.add_argument('--lr', type=float, default=.001)
     parser.add_argument('--weight_decay', type=float, default=.0)
     parser.add_argument('--l1', type=float, default=.01)
+    parser.add_argument('--step_size', type=float, default=.2)
 
     args = parser.parse_args()
     args.device = device

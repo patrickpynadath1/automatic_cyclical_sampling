@@ -106,6 +106,13 @@ def main(args):
         elif temp == "dula":
             sampler = samplers.LangevinSampler(model.data_dim, 1,
                                            fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.2, mh=False)
+
+        elif temp == "cyc_dmala":
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim, 1,
+                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.4, mh=True)
+        elif temp == "cyc_dula":
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim, 1,
+                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.2, mh=False)
         else:
             raise ValueError("Invalid sampler...")
 
