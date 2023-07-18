@@ -2,8 +2,8 @@
 
 python -u pcd_ebm_ema.py \
     --dataset_name static_mnist \
-    --sampler dula \
-    --step_size 0.1 \
+    --sampler cyc_dula \
+    --step_size 0.2 \
     --sampling_steps 40 \
     --viz_every 100 \
     --model resnet-64 \
@@ -16,4 +16,4 @@ python -u pcd_ebm_ema.py \
     --base_dist \
     --reinit_freq 0.0 \
     --eval_every 5000 \
-    --eval_sampling_steps 10000 ;
+    --eval_sampling_steps 10000

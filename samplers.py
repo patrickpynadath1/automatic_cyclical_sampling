@@ -5,6 +5,7 @@ import torch.nn as nn
 import torch.distributions as dists
 import utils
 import numpy as np
+import time
 device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
 
 class LangevinSampler(nn.Module):
@@ -22,7 +23,7 @@ class LangevinSampler(nn.Module):
         self.multi_hop = multi_hop
         self.temp = temp
         self.step_size = step_size  
-
+        print(n_steps)
         if approx:
             self.diff_fn = lambda x, m: utils.approx_difference_function(x, m) / self.temp
         else:
@@ -41,14 +42,12 @@ class LangevinSampler(nn.Module):
         
         EPS = 1e-10
         for i in range(self.n_steps):
-
             forward_delta = self.diff_fn(x_cur, model)
             term2 = 1./(2*self.step_size) # for binary {0,1}, the L2 norm is always 1        
             flip_prob = torch.exp(forward_delta-term2)/(torch.exp(forward_delta-term2)+1)
             rr = torch.rand_like(x_cur)
             ind = (rr<flip_prob)*1
             x_delta = (1. - x_cur)*ind + x_cur * (1. - ind)
-
             if self.mh:
                 probs = flip_prob*ind + (1 - flip_prob) * (1. - ind)
                 lp_forward = torch.sum(torch.log(probs+EPS),dim=-1)
@@ -99,10 +98,15 @@ class CyclicalLangevinSampler(nn.Module):
         self.num_iters = num_iters
 
         if approx:
-            self.diff_fn = lambda x, m: utils.approx_difference_function(x, m) / self.temp
+            self.diff_fn = lambda x, m: utils.approx_difference_function(x, m)
         else:
-            self.diff_fn = lambda x, m: utils.difference_function(x, m) / self.temp
+            self.diff_fn = lambda x, m: utils.difference_function(x, m)
 
+        # creating array for stepsizes
+        self.stepsize_iter = np.fromfunction(self.calc_stepsize, (self.num_iters, ))
+        self.temp_iter = np.fromfunction(self.calc_alpha, (self.num_iters,))
+        for i in range(self.num_iters):
+            print(self.temp_iter[i])
         self.mh = mh
         self.a_s = []
         self.hops = []
@@ -111,8 +115,14 @@ class CyclicalLangevinSampler(nn.Module):
         iter_per_cycle = math.ceil(self.num_iters / self.num_cycles)
         inner = (np.pi * (k_iter % iter_per_cycle))/iter_per_cycle
         cur_step_size = self.initial_step_size/2 * (np.cos(inner) + 1)
-        self.step_size = cur_step_size
-        return
+        return cur_step_size
+
+    def calc_alpha(self, k_iter):
+        iter_per_cycle = math.ceil(self.num_iters / self.num_cycles)
+        inner = (np.pi * (k_iter % iter_per_cycle))/iter_per_cycle
+        cur_step_size = 1/8 * (np.cos(inner) + 5)
+        return cur_step_size
+
 
     def step(self, x, model, k_iter):
 
@@ -122,15 +132,15 @@ class CyclicalLangevinSampler(nn.Module):
         prop_terms = []
 
         EPS = 1e-10
-        self.calc_stepsize(k_iter)
+        step_size = self.stepsize_iter[k_iter]
+        temp = self.temp_iter[k_iter]
         for i in range(self.n_steps):
-            forward_delta = self.diff_fn(x_cur, model)
-            term2 = 1. / (2 * self.step_size)  # for binary {0,1}, the L2 norm is always 1
+            forward_delta = self.diff_fn(x_cur, model) * temp
+            term2 = 1. / (step_size)  # for binary {0,1}, the L2 norm is always 1
             flip_prob = torch.exp(forward_delta - term2) / (torch.exp(forward_delta - term2) + 1)
             rr = torch.rand_like(x_cur)
             ind = (rr < flip_prob) * 1
             x_delta = (1. - x_cur) * ind + x_cur * (1. - ind)
-
             if self.mh:
                 probs = flip_prob * ind + (1 - flip_prob) * (1. - ind)
                 lp_forward = torch.sum(torch.log(probs + EPS), dim=-1)

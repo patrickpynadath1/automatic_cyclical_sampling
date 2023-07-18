@@ -50,11 +50,11 @@ def get_sampler(args):
                                            fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=args.step_size, mh=False)
 
         elif args.sampler == "cyc_dmala":
-            sampler = samplers.CyclicalLangevinSampler(data_dim, num_cycles=2, num_iters=args.sampling_steps,
+            sampler = samplers.CyclicalLangevinSampler(data_dim, num_cycles=2, num_iters=args.sampling_steps, n_steps=1,
                                            fixed_proposal=False, approx=True, multi_hop=False, temp=2., initial_step_size=args.step_size*2, mh=True)
 
         elif args.sampler == "cyc_dula":
-            sampler = samplers.CyclicalLangevinSampler(data_dim, num_cycles=2, num_iters=args.sampling_steps,
+            sampler = samplers.CyclicalLangevinSampler(data_dim, num_cycles=2, n_steps=1, num_iters=args.sampling_steps,
                                                        fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
                                                        initial_step_size=args.step_size * 2, mh=False)
 
@@ -211,7 +211,10 @@ def main(args):
             hops = []  # keep track of how much the sampelr moves particles around
             st = time.time()
             for k in range(args.sampling_steps):
-                x_fake_new = sampler.step(x_fake.detach(), model).detach()
+                if args.sampler in ['cyc_dula', 'cyc_dmala']:
+                    x_fake_new = sampler.step(x_fake.detach(), model, k_iter=k).detach()
+                else:
+                    x_fake_new = sampler.step(x_fake.detach(), model).detach()
                 h = (x_fake_new != x_fake).float().view(x_fake_new.size(0), -1).sum(-1).mean().item()
                 hops.append(h)
                 x_fake = x_fake_new
@@ -299,7 +302,7 @@ if __name__ == "__main__":
     parser.add_argument('--l2', type=float, default=0.0)
     parser.add_argument('--ema', type=float, default=0.999)
     # mcmc
-    parser.add_argument('--sampler', type=str, default='gibbs')
+    parser.add_argument('--sampler', type=str, default='cyc_dula')
     parser.add_argument('--seed', type=int, default=1234567)
     parser.add_argument('--sampling_steps', type=int, default=100)
     parser.add_argument('--reinit_freq', type=float, default=0.0)

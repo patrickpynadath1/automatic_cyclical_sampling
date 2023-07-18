@@ -85,6 +85,7 @@ def main(args):
     init_dist = torch.distributions.Bernoulli(probs=init_mean.to(device))
 
     # get sampler
+    print(args.eval_sampler)
     sampler = get_sampler(args)
 
     my_print(device)

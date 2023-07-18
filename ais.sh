@@ -2,8 +2,9 @@
 
 python -u eval_ais.py \
     --dataset_name static_mnist \
-    --eval_sampler dula \
-    --eval_step_size 0.1 \
+    --eval_sampler cyc_dula \
+    --sampler cyc_dula \
+    --eval_step_size 0.2 \
     --sampling_steps 40 \
     --model resnet-64 \
     --buffer_size 10000 \

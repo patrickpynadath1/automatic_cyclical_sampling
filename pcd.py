@@ -131,7 +131,7 @@ def main(args):
     elif args.sampler == "cyc_dmala":
             sampler = samplers.CyclicalLangevinSampler(model.data_dim, n_steps=1, approx=True, fixed_proposal=False, temp=2.,
                                                        initial_step_size=args.step_size * 2,mh=True,
-                                                       num_cycles=2, num_iters=args.sampling_steps)
+                                                       num_cycles=10, num_iters=args.sampling_steps)
     elif args.sampler == "cyc_dula":
             sampler = samplers.CyclicalLangevinSampler(model.data_dim, num_cycles=2, n_steps=1, approx=True,
                                                        fixed_proposal=False, temp=2.,
@@ -185,8 +185,8 @@ def main(args):
                                                                                               logp_fake.item(),
                                                                                               obj.item(),
                                                                                               sampler._hops))
-                if args.sampler in ['cyc_dmala', 'cyc_dula']:
-                    print(sampler.step_size)
+                # if args.sampler in ['cyc_dmala', 'cyc_dula']:
+                #     print(sampler.stepsize_iter[itr])
                 if args.model in ("lattice_potts", "lattice_ising"):
                     my_print("\tsigma true = {:.4f}, current sigma = {:.4f}".format(args.sigma,
                                                                                     model.sigma.data.item()))
@@ -236,12 +236,12 @@ def main(args):
                     with open("{}/sigma.txt".format(args.save_dir), 'w') as f:
                         f.write(str(final_sigma))
                 else:
-                    np.save("{}/sqerr_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
-                                                              args.sampling_steps),sq_errs)
-                    np.save("{}/rmse_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
-                                                             args.sampling_steps),rmses)
-                    np.save("{}/times_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
-                                                              args.sampling_steps),time_list)
+                    np.save("{}/sqerr_{}_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
+                                                              args.sampling_steps, args.step_size),sq_errs)
+                    np.save("{}/rmse_{}_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
+                                                             args.sampling_steps, args.step_size),rmses)
+                    np.save("{}/times_{}_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
+                                                              args.sampling_steps, args.step_size),time_list)
 
                 quit()
 

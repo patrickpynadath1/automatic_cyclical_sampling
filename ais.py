@@ -3,6 +3,8 @@ import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
 
+import samplers
+
 
 class AISModel(nn.Module):
     def __init__(self, model, init_dist):
@@ -45,8 +47,10 @@ def evaluate(model, init_dist, sampler,
         # update samples
         model_k = lambda x: model(x, beta=beta_k)
         for d in range(steps_per_iter):
-            samples = sampler.step(samples.detach(), model_k).detach()
-
+            if isinstance(sampler, samplers.CyclicalLangevinSampler):
+                samples = sampler.step(samples.detach(), model_k, d).detach()
+            else:
+                samples = sampler.step(samples.detach(), model_k).detach()
         if (itr + 1) % viz_every == 0:
             gen_samples.append(samples.cpu().detach())
 

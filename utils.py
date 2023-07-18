@@ -22,8 +22,10 @@ def difference_function(x, model):
         d[:, i] = delta
     return d
 
+# need to understand what this function does
 def approx_difference_function(x, model):
     x = x.requires_grad_()
+    out = model(x)
     gx = torch.autograd.grad(model(x).sum(), x)[0]
     wx = gx * -(2. * x - 1)
     return wx.detach()
