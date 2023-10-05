@@ -24,7 +24,8 @@ bash ising_learn_ablation.sh
 
 To reproduce results for ebm experiments, run the following: 
 
-bash ebm.sh
+bash ebm.sh 
+
 bash ebm_cyc.sh
 
 Once these are finished running, you can generate all the relevant figures by running the following: 
