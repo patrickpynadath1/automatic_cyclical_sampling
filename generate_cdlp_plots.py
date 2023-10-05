@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 from result_storing_utils import *
+import argparse
 import math
 
 base_dir_images = "figs/cyc_dlp_results"
@@ -13,17 +14,24 @@ RBM_CYCLES = [50, 100, 500, 1000]
 ISINGSAMPLE_CYCLES = [100, 500, 1000, 5000]
 
 
-def generate_all_plots():
-    ising_sample_best_performance()
-    rbm_sample_best_performance()
-    log_mmds_cyc_dula_dct, log_mmds_cyc_dmala_dct = get_value_dcts('rbm_sample', 'log_mmds')
-    log_rmse_cyc_dula_dct, log_rmse_cyc_dmala_dct = get_value_dcts('ising_sample', 'log_rmses')
-    ising_sample_bal_comp(log_rmse_cyc_dula_dct, log_rmse_cyc_dmala_dct)
-    rbm_sample_bal_comp(log_mmds_cyc_dula_dct, log_mmds_cyc_dmala_dct)
-    rbm_sample_cycle_comp(log_mmds_cyc_dula_dct, log_mmds_cyc_dmala_dct)
-    ising_sample_cycle_comp(log_rmse_cyc_dula_dct, log_rmse_cyc_dmala_dct)
-    rbm_sample_bal_sensitivity()
-    rbm_sample_acc_rate_cycle()
+
+def generate_plots(exp):
+    if exp == 'ising_sample':
+        ising_sample_best_performance()
+        log_rmse_cyc_dula_dct, log_rmse_cyc_dmala_dct = get_value_dcts('ising_sample', 'log_rmses')
+        ising_sample_bal_comp(log_rmse_cyc_dula_dct, log_rmse_cyc_dmala_dct)
+        ising_sample_cycle_comp(log_rmse_cyc_dula_dct, log_rmse_cyc_dmala_dct)
+    elif exp == 'rbm_sample':
+        rbm_sample_best_performance()
+        log_mmds_cyc_dula_dct, log_mmds_cyc_dmala_dct = get_value_dcts('rbm_sample', 'log_mmds')
+        rbm_sample_bal_comp(log_mmds_cyc_dula_dct, log_mmds_cyc_dmala_dct)
+        rbm_sample_cycle_comp(log_mmds_cyc_dula_dct, log_mmds_cyc_dmala_dct)
+        rbm_sample_bal_sensitivity()
+        rbm_sample_acc_rate_cycle()
+    elif exp == 'ising_learn':
+        ising_learn_best_performance()
+    elif exp == 'ebm_learn':
+        print("Vizualization function not done yet")
     return
 
 
@@ -418,5 +426,11 @@ def get_dct_key(step, bal, cyc):
     return k
 
 
+
 if __name__ == '__main__':
-    generate_all_plots()
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--exp', nargs='*', type=str, default=['rbm_sample', 'ising_sample', 'ising_learn', 'ebm_learn'])
+    args = parser.parse_args()
+    exps_to_visualize = args.exp
+    for exp in exps_to_visualize:
+        generate_plots(exp)
