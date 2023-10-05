@@ -2,7 +2,7 @@
 
 for STEP_SIZE in .5 1.0 1.5 2.0
 do
-  for NUM_CYCLES in 100, 500 1000 5000
+  for NUM_CYCLES in 100 500 1000 5000
   do
     for INIT_BAL in .6 .7 .8 .9 .99 1.0
     do
