@@ -7,7 +7,7 @@ import block_samplers
 import torch.nn as nn
 import os
 import torchvision
-device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
+device = torch.device('cuda:' + str(1) if torch.cuda.is_available() else 'cpu')
 import vamp_utils
 import ais
 import copy
@@ -50,13 +50,36 @@ def get_sampler(args):
                                            fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=args.step_size, mh=False)
 
         elif args.sampler == "cyc_dmala":
-            sampler = samplers.CyclicalLangevinSampler(data_dim, num_cycles=2, num_iters=args.sampling_steps,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., initial_step_size=args.step_size*2, mh=True)
+            sampler = samplers.CyclicalLangevinSampler(data_dim,
+                                                       num_cycles=args.num_cycles,
+                                                       num_iters=args.sampling_steps,
+                                                       fixed_proposal=False,
+                                                       approx=True,
+                                                       multi_hop=False,
+                                                       temp=2.,
+                                                       mean_stepsize=args.step_size,
+                                                       mh=True,
+                                                       n_steps=1,
+                                                       use_balancing_constant=args.use_balancing_constant,
+                                                       initial_balancing_constant=args.initial_balancing_constant,
+                                                       include_exploration=args.include_exploration,
+                                                       device=device)
 
         elif args.sampler == "cyc_dula":
-            sampler = samplers.CyclicalLangevinSampler(data_dim, num_cycles=2, num_iters=args.sampling_steps,
-                                                       fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
-                                                       initial_step_size=args.step_size * 2, mh=False)
+            sampler = samplers.CyclicalLangevinSampler(data_dim,
+                                                       num_cycles=args.num_cycles,
+                                                       num_iters=args.sampling_steps,
+                                                       fixed_proposal=False,
+                                                       approx=True,
+                                                       multi_hop=False,
+                                                       temp=2.,
+                                                       n_steps=1,
+                                                       mean_stepsize=args.step_size,
+                                                       mh=False,
+                                                       use_balancing_constant=args.use_balancing_constant,
+                                                       initial_balancing_constant=args.initial_balancing_constant,
+                                                       include_exploration=args.include_exploration,
+                                                       device=device)
 
         
         else:
@@ -131,6 +154,7 @@ def main(args):
 
 
     # get data mean and initialize buffer
+
     init_batch = []
     for x, _ in train_loader:
         init_batch.append(preprocess(x))
@@ -175,15 +199,18 @@ def main(args):
     # move to cuda
     model.to(device)
     ema_model.to(device)
-
-    # get sampler
+    if args.sampler in ['cyc_dula', 'cyc_dmala']:
+        is_cyclical = True
+    else:
+        is_cyclical = False
+        # get sampler
     sampler = get_sampler(args)
 
     my_print(device)
     my_print(model)
     my_print(buffer.size())
     my_print(sampler)
-
+    print(sampler.step_size)
     itr = 0
     best_val_ll = -np.inf
     hop_dists = []
@@ -211,7 +238,10 @@ def main(args):
             hops = []  # keep track of how much the sampelr moves particles around
             st = time.time()
             for k in range(args.sampling_steps):
-                x_fake_new = sampler.step(x_fake.detach(), model).detach()
+                if args.sampler in ['cyc_dula', 'cyc_dmala']:
+                    x_fake_new = sampler.step(x_fake.detach(), model, k).detach()
+                else:
+                    x_fake_new = sampler.step(x_fake.detach(), model).detach()
                 h = (x_fake_new != x_fake).float().view(x_fake_new.size(0), -1).sum(-1).mean().item()
                 hops.append(h)
                 x_fake = x_fake_new
@@ -257,7 +287,8 @@ def main(args):
                                                                             train_loader, val_loader, test_loader,
                                                                             preprocess, device,
                                                                             args.eval_sampling_steps,
-                                                                            args.test_batch_size)
+                                                                            args.test_batch_size,
+                                                                            is_cyclical=is_cyclical)
                 my_print("EMA Train log-likelihood ({}): {}".format(itr, train_ll.item()))
                 my_print("EMA Valid log-likelihood ({}): {}".format(itr, val_ll.item()))
                 my_print("EMA Test log-likelihood ({}): {}".format(itr, test_ll.item()))
@@ -276,7 +307,11 @@ def main(args):
                 if val_ll.item() > best_val_ll:
                     best_val_ll = val_ll.item()
                     my_print("Best valid likelihood")
-                    torch.save(d, "{}/best_ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,args.sampler,args.step_size))
+                    if args.sampler in ['cyc_dula', 'cyc_dmala', 'dula', 'dmala']:
+                        torch.save(d, "{}/best_ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,sampler.get_name() ,args.step_size))
+                    else:
+                        torch.save(d, "{}/best_ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name, args.sampler,args.step_size))
+
                 else:
                     torch.save(d, "{}/ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,args.sampler,args.step_size))
 
@@ -284,6 +319,7 @@ def main(args):
 
             itr += 1
     np.save("{}/test_ll_{}_{}_{}.npy".format(args.save_dir,args.dataset_name,args.sampler,args.step_size),test_ll_list)
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # data
@@ -318,6 +354,10 @@ if __name__ == "__main__":
     parser.add_argument('--eval_every', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=.001)
     parser.add_argument('--weight_decay', type=float, default=.0)
+    parser.add_argument('--num_cycles', type=int, default=2)
+    parser.add_argument('--include_exploration', action='store_true')
+    parser.add_argument('--use_balancing_constant', action='store_true')
+    parser.add_argument('--initial_balancing_constant', type=float, default=1.0)
 
     args = parser.parse_args()
     args.device = device

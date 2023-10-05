@@ -90,12 +90,16 @@ def main(args):
     my_print(device)
     my_print(model)
     my_print(sampler)
-
+    if args.sampler in ['cyc_dula', 'cyc_dmala']:
+        is_cyclical = True
+    else:
+        is_cyclical = False
     logZ, train_ll, val_ll, test_ll, ais_samples = ais.evaluate(model, init_dist, sampler,
                                                                 train_loader, val_loader, test_loader,
                                                                 preprocess, device,
                                                                 args.eval_sampling_steps,
-                                                                args.n_samples, viz_every=args.viz_every)
+                                                                args.n_samples, viz_every=args.viz_every,
+                                                                is_cyclical=is_cyclical)
     my_print("EMA Train log-likelihood: {}".format(train_ll.item()))
     my_print("EMA Valid log-likelihood: {}".format(val_ll.item()))
     my_print("EMA Test log-likelihood: {}".format(test_ll.item()))

@@ -9,10 +9,12 @@ import os
 device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
 import utils
 import tensorflow_probability as tfp
+import tqdm
 import block_samplers
 import time
+from result_storing_utils import *
 import pickle
-
+import neptune
 
 def makedirs(dirname):
     """
@@ -82,6 +84,8 @@ def main(args):
         model.b_h.data = torch.randn_like(model.b_h.data) * 1.0
         viz = plot = None
 
+
+
     gt_samples = model.gibbs_sample(n_steps=args.gt_steps, n_samples=args.n_samples + args.n_test_samples, plot=True)
     kmmd = mmd.MMD(mmd.exp_avg_hamming, False)
     gt_samples, gt_samples2 = gt_samples[:args.n_samples], gt_samples[args.n_samples:]
@@ -91,7 +95,6 @@ def main(args):
     print("gt <--> gt log-mmd", opt_stat, opt_stat.log10())
 
     new_samples = model.gibbs_sample(n_steps=0, n_samples=args.n_test_samples)
-
     log_mmds = {}
     log_mmds['gibbs'] = []
     ars = {}
@@ -101,9 +104,11 @@ def main(args):
     chains = {}
     chain = []
     x0 = model.init_dist.sample((args.n_test_samples,)).to(device)
-    temps = [ 'bg-1', 'hb-10-1', 'gwg', 'dmala', 'dula']
+    neptune_pref = "rbm_sample"
+    temps = args.samplers
     for temp in temps:
         if temp == 'dim-gibbs':
+
             sampler = samplers.PerDimGibbsSampler(args.n_visible)
         elif temp == "rand-gibbs":
             sampler = samplers.PerDimGibbsSampler(args.n_visible, rand=True)
@@ -120,14 +125,48 @@ def main(args):
             n_hops = int(temp.split('-')[1])
             sampler = samplers.MultiDiffSampler(args.n_visible, 1,
                                                 approx=True, temp=2., n_samples=n_hops)
-        
+
         elif temp == "dmala":
             sampler = samplers.LangevinSampler(args.n_visible, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.2, mh=True)
+                                               fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
+                                               step_size=args.step_size, mh=True, store_reject=args.save_rejects)
+
         elif temp == "dula":
             sampler = samplers.LangevinSampler(args.n_visible, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.1, mh=False)
-        
+                                               fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
+                                               step_size=args.step_size, mh=False)
+
+        elif temp == "cyc_dula":
+            sampler = samplers.CyclicalLangevinSampler(args.n_visible, n_steps=1, num_cycles=args.num_cycles,
+                                                        use_balancing_constant=args.use_balancing_constant,
+                                                        initial_balancing_constant=args.initial_balancing_constant,
+                                                        fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
+                                                        mean_stepsize=args.step_size, mh=False, num_iters=args.n_steps,
+                                                       include_exploration=args.include_exploration,
+                                                       device=device,
+                                                       store_diff=args.save_diff,
+                                                       burn_in_adaptive=args.burn_in_adaptive,
+                                                       adapt_rate=args.adapt_rate,
+                                                       adapt_alg=args.adapt_alg,
+                                                       param_to_adapt=args.param_adapt)
+        elif temp == "cyc_dmala":
+            sampler = samplers.CyclicalLangevinSampler(args.n_visible, n_steps=1, num_cycles=args.num_cycles,
+                                                       use_balancing_constant=args.use_balancing_constant,
+                                                       initial_balancing_constant=args.initial_balancing_constant,
+                                                       fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
+                                                       mean_stepsize=args.step_size, mh=True,
+                                                       num_iters=args.n_steps,
+                                                       include_exploration=args.include_exploration,
+                                                       device=device,
+                                                       half_mh=args.halfMH,
+                                                       store_reject=args.save_rejects,
+                                                       store_diff=args.save_diff,
+                                                       burn_in_adaptive=args.burn_in_adaptive,
+                                                       adapt_rate=args.adapt_rate,
+                                                       adapt_alg=args.adapt_alg,
+                                                       param_to_adapt=args.param_adapt)
+
+
         else:
             raise ValueError("Invalid sampler...")
 
@@ -139,17 +178,42 @@ def main(args):
         times[temp] = []
         chain = []
         cur_time = 0.
-        for i in range(args.n_steps):
+        print_every_i = 0
+        rejects = []
+        acc = []
+        model_name = sampler.get_name()
+
+        if temp in ['cyc_dula', 'cyc_dmala']:
+            if args.burn_in_adaptive:
+                if args.adapt_alg == 'simple_cycle':
+                    steps, burnin_acc = sampler.run_burnin_cycle_adaptive(x0.detach(), model, args.adaptive_cycles,
+                                                                   lr=args.adapt_rate, opt_acc = .3)
+
+                elif args.adapt_alg == 'simple_iter':
+                    steps, burnin_acc = sampler.run_burnin_iter_adaptive(x0.detach(), model, args.adaptive_cycles, lr=args.adapt_rate)
+                elif args.adapt_alg == 'sun_ab':
+                    steps, burnin_hops = sampler.run_burnin_sun(x0.detach(), model, args.adaptive_cycles)
+                else:
+                    raise ValueError("Not implemented yet :/")
+
+        for i in tqdm.tqdm(range(args.n_steps), desc=f"{temp}"):
             # do sampling and time it
             st = time.time()
-            xhat = sampler.step(x.detach(), model).detach()
+            if temp in ['cyc_dula', 'cyc_dmala']:
+                xhat = sampler.step(x.detach(), model, i).detach()
+            else:
+                xhat = sampler.step(x.detach(), model).detach()
             cur_time += time.time() - st
-
+            # if temp in ['cyc_dmala', 'dmala'] and args.save_rejects:
+            #     if sampler.have_reject:
+            #         rejects.append(sampler.reject_sample.cpu().numpy())
+            #         acc.append(xhat.detach().cpu().numpy())
             # compute hamming dist
             cur_hops = (x != xhat).float().sum(-1).mean().item()
 
             # update trajectory
             x = xhat
+
 
             if i % args.subsample == 0:
                 if args.ess_statistic == "dims":
@@ -159,24 +223,47 @@ def main(args):
                     h = (xc != gt_samples).float().sum(-1)
                     chain.append(h.detach().cpu().numpy()[None])
 
+
             if i % args.viz_every == 0 and plot is not None:
                 plot("{}/temp_{}_samples_{}.png".format(args.save_dir, temp, i), x)
 
-            if i % args.print_every == 0:
+
+            if i % args.print_every == print_every_i:
                 hard_samples = x
                 stat = kmmd.compute_mmd(hard_samples, gt_samples)
                 log_stat = stat.log().item()
                 log_mmds[temp].append(log_stat)
                 times[temp].append(cur_time)
                 hops[temp].append(cur_hops)
-                print("temp {}, itr = {}, log-mmd = {:.4f}, hop-dist = {:.4f}".format(temp, i, log_stat, cur_hops))
 
         chain = np.concatenate(chain, 0)
         ess[temp] = get_ess(chain, args.burn_in)
         chains[temp] = chain
+        ess_mean = ess[temp].mean()
+        ess_std = ess[temp].std()
+
         print("ess = {} +/- {}".format(ess[temp].mean(), ess[temp].std()))
         # np.save("{}/rbm_sample_times_{}.npy".format(args.save_dir,temp),times[temp])
         # np.save("{}/rbm_sample_logmmd_{}.npy".format(args.save_dir,temp),log_mmds[temp])
+        if temp in ['cyc_dula', 'cyc_dmala', 'dula', 'dmala']:
+            store_sequential_data(args.save_dir, model_name, "log_mmds", log_mmds[temp])
+            store_sequential_data(args.save_dir, model_name, "times", times[temp])
+            write_ess_data(args.save_dir, model_name, {'ess_mean': ess_mean, 'ess_std':ess_std})
+            if args.burn_in_adaptive:
+                store_sequential_data(args.save_dir, model_name, "steps_burnin", steps)
+                if args.adapt_alg in ['simple_iter', 'simple_cycle']:
+                    store_sequential_data(args.save_dir, model_name, "a_s_burnin", burnin_acc)
+                if args.adapt_alg == 'sun_ab':
+                    store_sequential_data(args.save_dir, model_name, "burnin_hops", burnin_hops)
+            if args.save_diff:
+                store_sequential_data(args.save_dir, model_name, "diffs", np.array(sampler.diff_values))
+                store_sequential_data(args.save_dir, model_name, "flip_probs", np.array(sampler.flip_probs))
+
+            # if temp in ['dmala', 'cyc_dmala']:
+            #     store_sequential_data(args.save_dir, model_name, "a_s", sampler.a_s)
+            #     if args.save_rejects:
+            #         store_sequential_data(args.save_dir, model_name, "rejects", np.array(rejects))
+            #         store_sequential_data(args.save_dir, model_name, "acc", np.array(acc))
 
     plt.clf()
     for temp in temps:
@@ -209,6 +296,20 @@ if __name__ == "__main__":
     parser.add_argument('--subsample', type=int, default=1)
     parser.add_argument('--burn_in', type=float, default=.1)
     parser.add_argument('--ess_statistic', type=str, default="dims", choices=["hamming", "dims"])
+    parser.add_argument('--num_cycles', type=int, default=250)
+    parser.add_argument('--step_size', type=float, default=1.5)
+    parser.add_argument('--samplers', nargs='*', type=str, default=['cyc_dula'])
+    parser.add_argument('--initial_balancing_constant', type=float, default=1)
+    parser.add_argument('--use_balancing_constant', action='store_true')
+    parser.add_argument('--include_exploration', action='store_true')
+    parser.add_argument('--halfMH', action='store_true')
+    parser.add_argument('--save_rejects', action='store_true')
+    parser.add_argument('--save_diff', action='store_true')
+    parser.add_argument('--adaptive_cycles', type=int, default=150)
+    parser.add_argument('--burn_in_adaptive', action='store_true')
+    parser.add_argument('--adapt_rate', type=float, default=.025)
+    parser.add_argument('--adapt_alg', type=str, default='sun_ab')
+    parser.add_argument('--param_adapt', type=str, default='bal')
     args = parser.parse_args()
 
     main(args)

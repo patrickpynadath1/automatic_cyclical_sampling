@@ -13,6 +13,7 @@ import utils
 from tqdm import tqdm
 import pickle
 import time
+from result_storing_utils import *
 
 
 def makedirs(dirname):
@@ -31,8 +32,9 @@ def l1(module):
 
 def main(args):
     makedirs(args.save_dir)
+    neptune_pref = 'ising_learn'
     logger = open("{}/log.txt".format(args.save_dir), 'w')
-
+    print(f'\n\n{args.sampler}\n\n')
     def my_print(s):
         print(s)
         logger.write(str(s) + '\n')
@@ -129,14 +131,32 @@ def main(args):
     elif args.sampler == "dula":
             sampler = samplers.LangevinSampler(model.data_dim, 1, approx=True, fixed_proposal=False, temp=2., step_size=args.step_size,mh=False)
     elif args.sampler == "cyc_dmala":
-            sampler = samplers.CyclicalLangevinSampler(model.data_dim, n_steps=1, approx=True, fixed_proposal=False, temp=2.,
-                                                       initial_step_size=args.step_size * 2,mh=True,
-                                                       num_cycles=2, num_iters=args.sampling_steps)
-    elif args.sampler == "cyc_dula":
-            sampler = samplers.CyclicalLangevinSampler(model.data_dim, num_cycles=2, n_steps=1, approx=True,
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim,
+                                                       n_steps=1,
+                                                       approx=True,
                                                        fixed_proposal=False, temp=2.,
-                                                       initial_step_size=args.step_size * 2, mh=False, num_iters=args.sampling_steps)
-         
+                                                       mean_stepsize=args.step_size,
+                                                       mh=True,
+                                                       use_balancing_constant=args.use_balancing_constant,
+                                                       initial_balancing_constant=args.initial_balancing_constant,
+                                                       num_cycles=args.num_cycles,
+                                                       num_iters=args.sampling_steps,
+                                                       device=device,
+                                                       include_exploration=args.include_exploration
+                                                       )
+    elif args.sampler == "cyc_dula":
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim,
+                                                       n_steps=1,
+                                                       approx=True,
+                                                       fixed_proposal=False, temp=2.,
+                                                       mean_stepsize=args.step_size,
+                                                       mh=False,
+                                                       use_balancing_constant=args.use_balancing_constant,
+                                                       initial_balancing_constant=args.initial_balancing_constant,
+                                                       num_cycles=args.num_cycles,
+                                                       num_iters=args.sampling_steps,
+                                                       device=device,
+                                                       include_exploration=args.include_exploration)
     else:
         assert "gwg-" in args.sampler
         n_hop = int(args.sampler.split('-')[1])
@@ -185,8 +205,7 @@ def main(args):
                                                                                               logp_fake.item(),
                                                                                               obj.item(),
                                                                                               sampler._hops))
-                if args.sampler in ['cyc_dmala', 'cyc_dula']:
-                    print(sampler.step_size)
+
                 if args.model in ("lattice_potts", "lattice_ising"):
                     my_print("\tsigma true = {:.4f}, current sigma = {:.4f}".format(args.sigma,
                                                                                     model.sigma.data.item()))
@@ -194,6 +213,9 @@ def main(args):
                     sq_err = ((ground_truth_J - get_J()) ** 2).sum()
                     rmse = ((ground_truth_J - get_J()) ** 2).mean().sqrt()
                     my_print("\t err^2 = {:.4f}, log rmse = {:.4f}".format(sq_err, torch.log(rmse)))
+
+
+
 
 
             if itr % args.viz_every == 0:
@@ -216,6 +238,7 @@ def main(args):
 
                     rmse = ((ground_truth_J - get_J()) ** 2).mean().sqrt()
                     rmses.append(rmse.item())
+
                     plt.clf()
                     plt.plot(rmses, label="rmse")
                     plt.legend()
@@ -236,12 +259,14 @@ def main(args):
                     with open("{}/sigma.txt".format(args.save_dir), 'w') as f:
                         f.write(str(final_sigma))
                 else:
-                    np.save("{}/sqerr_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
-                                                              args.sampling_steps),sq_errs)
-                    np.save("{}/rmse_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
-                                                             args.sampling_steps),rmses)
-                    np.save("{}/times_{}_{}_{}.npy".format(args.save_dir,args.sampler,args.sigma,
-                                                              args.sampling_steps),time_list)
+                    if args.sampler in ['cyc_dula', 'cyc_dmala', 'dula', 'dmala']:
+                        model_name = sampler.get_name()
+                        store_sequential_data(args.save_dir, model_name, 'sqerr', sq_errs)
+                        store_sequential_data(args.save_dir, model_name, 'rmse', rmses)
+                        store_sequential_data(args.save_dir, model_name, 'times', time_list)
+                        if args.sampler in ['dmala', 'cyc_dmala']:
+                            store_sequential_data(args.save_dir, model_name, 'a_s', sampler.a_s)
+
 
                 quit()
 
@@ -288,6 +313,11 @@ if __name__ == "__main__":
     parser.add_argument('--weight_decay', type=float, default=.0)
     parser.add_argument('--l1', type=float, default=.01)
     parser.add_argument('--step_size', type=float, default=.2)
+    parser.add_argument('--initial_balancing_constant', type=float, default=1)
+    parser.add_argument('--use_balancing_constant', action='store_true')
+    parser.add_argument('--num_cycles', type=int, default=5)
+    parser.add_argument('--include_exploration', action='store_true')
+
 
     args = parser.parse_args()
     args.device = device

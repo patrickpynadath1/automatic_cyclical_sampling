@@ -1,4 +1,5 @@
 import argparse
+from result_storing_utils import *
 import rbm
 import torch
 import numpy as np
@@ -10,7 +11,9 @@ device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
 import tensorflow_probability as tfp
 import block_samplers
 import time
+import neptune
 import pickle
+import tqdm
 import itertools
 
 def makedirs(dirname):
@@ -60,7 +63,6 @@ def get_gt_mean(args,model):
 
 def main(args):
     makedirs(args.save_dir)
-
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
@@ -79,8 +81,15 @@ def main(args):
     means = {}
     rmses = {}
     x0 = model.init_dist.sample((args.n_test_samples,)).to(device)
-    temps = [ 'hb-10-1', 'bg-1', 'gwg', 'dmala', 'dula']
+    possible_temps = ['cyc_dula', 'cyc_dmala','hb-10-1', 'bg-1', 'gwg', 'dmala', 'dula']
+    # temps = ['cyc_dula', 'cyc_dmala', 'dmala', 'dula']
+    temps = args.samplers
+    # only allow samplers in this list
+    for s in temps:
+        assert s in possible_temps
+
     for temp in temps:
+        to_log = {}
         if temp == 'dim-gibbs':
             sampler = samplers.PerDimGibbsSampler(model.data_dim)
         elif temp == "rand-gibbs":
@@ -90,31 +99,53 @@ def main(args):
         elif "bg-" in temp:
             block_size = int(temp.split('-')[1])
             sampler = block_samplers.BlockGibbsSampler(model.data_dim, block_size)
+            to_log["block_size"] = block_size
         elif "hb-" in temp:
             block_size, hamming_dist = [int(v) for v in temp.split('-')[1:]]
             sampler = block_samplers.HammingBallSampler(model.data_dim, block_size, hamming_dist)
+            to_log["block_size"] = block_size
+            to_log["hamming_dist"] = hamming_dist
+
         elif temp == "gwg":
             sampler = samplers.DiffSampler(model.data_dim, 1,
                                            fixed_proposal=False, approx=True, multi_hop=False, temp=2.)
+
+
         elif "gwg-" in temp:
             n_hops = int(temp.split('-')[1])
             sampler = samplers.MultiDiffSampler(model.data_dim, 1,
                                                 approx=True, temp=2., n_samples=n_hops)
+
         elif temp == "dmala":
             sampler = samplers.LangevinSampler(model.data_dim, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.4, mh=True)
+                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=args.step_size, mh=True)
+
         elif temp == "dula":
             sampler = samplers.LangevinSampler(model.data_dim, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.2, mh=False)
+                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=args.step_size, mh=False)
+
 
         elif temp == "cyc_dmala":
-            sampler = samplers.CyclicalLangevinSampler(model.data_dim, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.4, mh=True)
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim, n_steps=1, num_cycles=args.num_cycles,
+                                                       initial_balancing_constant=float(args.initial_balancing_constant),
+                                                       use_balancing_constant=args.use_balancing_constant,
+                                                        fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
+                                                       mean_stepsize=args.step_size, mh=True,
+                                                       num_iters=args.n_steps, device=device,
+                                                       include_exploration=args.include_exploration,
+                                                       half_mh=args.halfMH)
+
         elif temp == "cyc_dula":
-            sampler = samplers.CyclicalLangevinSampler(model.data_dim, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=0.2, mh=False)
+            sampler = samplers.CyclicalLangevinSampler(model.data_dim, n_steps=1, num_cycles=args.num_cycles,
+                                                       use_balancing_constant=args.use_balancing_constant,
+                                                       initial_balancing_constant=args.initial_balancing_constant,
+                                                       fixed_proposal=False, approx=True, multi_hop=False, temp=2.,
+                                                       mean_stepsize=args.step_size, mh=False, num_iters=args.n_steps,
+                                                       device=device, include_exploration=args.include_exploration)
+
         else:
             raise ValueError("Invalid sampler...")
+
 
         x = x0.clone().detach()
         times[temp] = []
@@ -124,10 +155,14 @@ def main(args):
         mean = torch.zeros_like(x)
         time_list = []
         rmses[temp] = []
-        for i in range(args.n_steps):
+
+        for i in tqdm.tqdm(range(args.n_steps), desc=f"{temp}"):
             # do sampling and time it
             st = time.time()
-            xhat = sampler.step(x.detach(), model).detach()
+            if temp in ['cyc_dula', 'cyc_dmala']:
+                xhat = sampler.step(x.detach(), model, i).detach()
+            else:
+                xhat = sampler.step(x.detach(), model).detach()
             cur_time += time.time() - st
 
             # compute hamming dist
@@ -150,6 +185,8 @@ def main(args):
                 rmse = get_log_rmse(mean / (i+1),gt_mean)
                 rmses[temp].append(rmse)
 
+
+
             if i % args.print_every == 0:
                 times[temp].append(cur_time)
                 hops[temp].append(cur_hops)
@@ -157,11 +194,20 @@ def main(args):
         means[temp] = mean / args.n_steps
         chain = np.concatenate(chain, 0)
         chains[temp] = chain
-        if not args.no_ess:
-            ess[temp] = get_ess(chain, args.burn_in)
-            print("ess = {} +/- {}".format(ess[temp].mean(), ess[temp].std()))
-        np.save("{}/ising_sample_times_{}.npy".format(args.save_dir,temp),time_list)
-        np.save("{}/ising_sample_logrmses_{}.npy".format(args.save_dir,temp),rmses)
+
+        if temp in ['cyc_dula', 'cyc_dmala', 'dula', 'dmala']:
+            model_name = sampler.get_name()
+            store_sequential_data(args.save_dir, model_name, "log_rmses", rmses[temp])
+            store_sequential_data(args.save_dir, model_name, "times", time_list)
+            if not args.no_ess:
+                run_ess = get_ess(chain, args.burn_in)
+                ess[temp] = run_ess
+                write_ess_data(args.save_dir, model_name, {'ess_mean': run_ess.mean(), 'ess_std':run_ess.std()})
+            if temp in ['dmala', 'cyc_dmala']:
+                store_sequential_data(args.save_dir, model_name, "a_s", sampler.a_s)
+            print(model_name)
+
+
     plt.clf()
     for temp in temps:
         plt.plot(rmses[temp], label="{}".format(temp))
@@ -203,6 +249,13 @@ if __name__ == "__main__":
     parser.add_argument('--burn_in', type=float, default=.1)
     parser.add_argument('--ess_statistic', type=str, default="dims", choices=["hamming", "dims"])
     parser.add_argument('--no_ess', action="store_true")
-    args = parser.parse_args()
+    parser.add_argument('--num_cycles', type=int, default=5000)
+    parser.add_argument('--step_size', type=float, default=2.0)
+    parser.add_argument('--samplers', nargs='*', type=str, default=['cyc_dmala'])
+    parser.add_argument('--initial_balancing_constant', type=float, default=1.0)
+    parser.add_argument('--use_balancing_constant', action='store_true')
+    parser.add_argument('--include_exploration', action='store_true')
+    parser.add_argument('--halfMH', action='store_true')
 
+    args = parser.parse_args()
     main(args)
