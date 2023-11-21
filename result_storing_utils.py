@@ -1,5 +1,6 @@
 import numpy as np
 import pickle
+import os
 # commands for making it easier to store data
 
 def get_cyc_model(temp,
@@ -28,6 +29,46 @@ def get_cyc_model(temp,
 
 def get_normal_model(temp, stepsize):
     return f"{temp}_stepsize_{stepsize}"
+
+
+
+def store_seed_avg(seed_avg, num_seeds, exp):
+    base_dir = f"{exp}/num_seeds_{num_seeds}"
+    if not os.path.exists(base_dir):
+        os.mkdir(base_dir)
+    for model_name, res in seed_avg.items():
+        for metric, statistics in res.items():
+            if metric != "ess_res" and "burnin" not in metric:
+                store_sequential_data(base_dir, model_name, f"{metric}_mean", statistics['mean'])
+
+                store_sequential_data(base_dir, model_name, f"{metric}_var", statistics['var'])
+            elif "burnin" in metric: 
+                file_name = f"{base_dir}/{model_name}_{metric}.pickle"
+                with open(file_name, 'wb') as file:
+                    pickle.dump(statistics, file)
+            else:
+                write_ess_data(base_dir, model_name, statistics)
+    return 
+
+
+def package_temp_results(temp, hops, log_mmds, run_ess, times, sampler,
+                         steps = None, burnin_acc = None, burnin_hops = None):
+    temp_res = {}
+    temp_res["hops"] = hops[temp]
+    temp_res["log_mmds"] = log_mmds[temp]
+    temp_res["times"] = times[temp]  
+    temp_res["ess_res"] = {'ess_mean': run_ess.mean(), 'ess_std':run_ess.std()}
+    if temp in ['dmala', 'cyc_dmala']:
+        temp_res["a_s"] = sampler.a_s
+        temp_res["steps_burnin"] = steps
+    if sampler.burn_in_adaptive and burnin_acc and burnin_hops: # just need to make sure they are not None  
+        if sampler.adapt_alg in ['simple_iter', 'simple_cycle']:
+            temp_res["burnin_acc"] = burnin_acc
+        if sampler.adapt_alg == 'sun_ab':
+            temp_res["burnin_hops"] = burnin_hops
+        temp_res["burn_in_flip_probs"] = sampler.burn_in_flip_probs
+        temp_res["flip_probs"] = sampler.flip_probs
+    return temp_res
 
 
 # function for getting data goes here

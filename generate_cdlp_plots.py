@@ -10,7 +10,7 @@ base_dir_ising_learn = "figs/ising_learn"
 
 STEPSIZES = [.5, 1.0, 1.5, 2.0]
 BAL_CONSTANTS = [.6, .7, .8, .9, 1.0]
-RBM_CYCLES = [50, 100, 500, 1000]
+RBM_CYCLES = [50, 100, 250, 500]
 ISINGSAMPLE_CYCLES = [100, 500, 1000, 5000]
 
 
