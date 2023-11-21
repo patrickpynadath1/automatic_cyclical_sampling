@@ -3,7 +3,6 @@ import torch
 import numpy as np
 import os
 import torchvision
-device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
 import vamp_utils
 import mlp
 from pcd_ebm_ema import get_sampler, EBM
@@ -22,13 +21,15 @@ def main(args):
     makedirs(args.save_dir)
     logger = open("{}/log.txt".format(args.save_dir), 'w')
 
+    device = torch.device('cuda:' + str(args.cuda_id) if torch.cuda.is_available() else 'cpu')
+    args.device = device
     def my_print(s):
         print(s)
         logger.write(str(s) + '\n')
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-
+    torch.cuda.manual_seed_all(args.seed)
     my_print("Loading data")
     train_loader, val_loader, test_loader, args = vamp_utils.load_dataset(args)
     plot = lambda p, x: torchvision.utils.save_image(x.view(x.size(0),
@@ -71,9 +72,10 @@ def main(args):
         model = EBM(net)
 
     # d = torch.load("{}/best_ckpt_{}_{}.pt".format(args.save_dir,args.eval_sampler,args.eval_step_size))
-    d = torch.load("{}/best_ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,args.eval_sampler,args.eval_step_size))
+    # d = torch.load("{}/best_ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,args.eval_sampler,args.eval_step_size))
     # d = torch.load("{}/best_ckpt_{}_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,args.eval_sampler,args.eval_step_size,args.sampling_steps))
 
+    d = torch.load(f"{args.save_dir}/{args.ckpt_path}")
 
     if args.ema:
         model.load_state_dict(d['ema_model'])
@@ -90,12 +92,16 @@ def main(args):
     my_print(device)
     my_print(model)
     my_print(sampler)
-
+    if args.sampler in ['cyc_dula', 'cyc_dmala']:
+        is_cyclical = True
+    else:
+        is_cyclical = False
     logZ, train_ll, val_ll, test_ll, ais_samples = ais.evaluate(model, init_dist, sampler,
                                                                 train_loader, val_loader, test_loader,
                                                                 preprocess, device,
                                                                 args.eval_sampling_steps,
-                                                                args.n_samples, viz_every=args.viz_every)
+                                                                args.n_samples, viz_every=args.viz_every,
+                                                                is_cyclical=is_cyclical)
     my_print("EMA Train log-likelihood: {}".format(train_ll.item()))
     my_print("EMA Valid log-likelihood: {}".format(val_ll.item()))
     my_print("EMA Test log-likelihood: {}".format(test_ll.item()))
@@ -139,8 +145,7 @@ if __name__ == "__main__":
     parser.add_argument('--eval_every', type=int, default=1000)
     parser.add_argument('--lr', type=float, default=.001)
     parser.add_argument('--weight_decay', type=float, default=.0)
-
+    parser.add_argument('--cuda_id', type=int, default=0)
     args = parser.parse_args()
-    args.device = device
     print('sampler',args.eval_sampler,'lr',args.eval_step_size)
     main(args)

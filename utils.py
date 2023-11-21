@@ -17,15 +17,106 @@ def difference_function(x, model):
     orig_out = model(x).squeeze()
     for i in range(x.size(1)):
         x_pert = x.clone()
-        x_pert[:, i] = 1. - x[:, i]
+        x_pert[:, i] = 1.0 - x[:, i]
         delta = model(x_pert).squeeze() - orig_out
         d[:, i] = delta
     return d
 
+
+def get_rand_seeds(file_name):
+    with open(file_name, "rb") as f:
+        seeds = f.readlines()
+        seeds = [int(s) for s in seeds]
+        return seeds
+
+
+def get_dlp_samplers(temp, dim, device, args):
+    use_mh = "dmala" in temp
+    if "cyc" in temp:
+        sampler = samplers.CyclicalLangevinSampler(
+            dim,
+            n_steps=1,
+            num_cycles=args.num_cycles,
+            initial_balancing_constant=args.initial_balancing_constant,
+            fixed_proposal=False,
+            approx=True,
+            multi_hop=False,
+            temp=1.0,
+            mean_stepsize=args.step_size,
+            mh=use_mh,
+            num_iters=args.n_steps,
+            device=device,
+            burnin_budget=args.burnin_budget,
+            burnin_adaptive=args.burnin_adaptive,
+            burnin_lr=args.burnin_lr,
+            adapt_alg=args.burnin_step_obj,
+            sbc=args.use_manual_EE,
+        )
+    elif temp in ["dmala", "dula"]:
+        sampler = samplers.LangevinSampler(
+            dim,
+            n_steps=1,
+            bal=args.initial_balancing_constant,
+            fixed_proposal=False,
+            approx=True,
+            multi_hop=False,
+            temp=1.0,
+            step_size=args.step_size,
+            mh=use_mh,
+            use_big=args.use_big,
+            burn_in_budget=args.burnin_budget,
+            burn_in_adaptive=args.burnin_adaptive,
+            adapt_alg=args.burnin_step_obj,
+        )
+
+    else:
+        raise ValueError("Invalid Sampler")
+    return sampler
+
+
+# function for performing averaging across results for different seeds
+# structure for bookkeeping should be {seed : seed_res},
+# structure for seed_res should be {seed_res : temp_res}
+# structure for temp_res should be {metric_name : values}
+def seed_averaging(bookkeeping):
+    output = {}
+
+    for seed, seed_res in bookkeeping.items():
+        for temp, temp_res in seed_res.items():
+            if temp not in list(output.keys()):
+                output[temp] = {}
+            for metric, values in temp_res.items():
+                if metric not in list(output[temp].keys()):
+                    output[temp][metric] = [values]
+                else:
+                    output[temp][metric].append(values)
+
+    for temp, metric_list in output.items():
+        for metric, values in metric_list.items():
+            if metric != "ess_res" and "burnin" not in metric:
+                values = np.array(values)
+                output[temp][metric] = {
+                    "mean": values.mean(axis=0),
+                    "var": values.var(axis=0),
+                }
+            elif metric == "ess_res":
+                mean = np.array([v["ess_mean"] for v in values]).mean()
+                var_mean = np.array([v["ess_mean"] for v in values]).var()
+                mean_var = np.array([v["ess_std"] ** 0.5 for v in values]).mean()
+                output[temp][metric] = {
+                    "ess_mean": mean,
+                    "var_mean": var_mean,
+                    "mean_var": mean_var,
+                }
+            else:
+                output[temp][metric] = values
+    return output
+
+
 def approx_difference_function(x, model):
     x = x.requires_grad_()
     gx = torch.autograd.grad(model(x).sum(), x)[0]
-    wx = gx * -(2. * x - 1)
+    wx = gx * -(2.0 * x - 1)
     return wx.detach()
 
 
@@ -35,16 +126,18 @@ def difference_function_multi_dim(x, model):
     for i in range(x.size(1)):
         for j in range(x.size(2)):
             x_pert = x.clone()
-            x_pert[:, i] = 0.
-            x_pert[:, i, j] = 1.
+            x_pert[:, i] = 0.0
+            x_pert[:, i, j] = 1.0
             delta = model(x_pert).squeeze() - orig_out
             d[:, i, j] = delta
     return d
+
 
 def langevin_approx_difference_function_multi_dim(x, model):
     x = x.requires_grad_()
     gx = torch.autograd.grad(model(x).sum(), x)[0]
     return gx.detach()
+
 
 def approx_difference_function_multi_dim(x, model):
     x = x.requires_grad_()
@@ -57,7 +150,7 @@ def short_run_mcmc(logp_net, x_init, k, sigma, step_size=None):
     x_k = torch.autograd.Variable(x_init, requires_grad=True)
     # sgld
     if step_size is None:
-        step_size = (sigma ** 2.) / 2.
+        step_size = (sigma**2.0) / 2.0
     for i in range(k):
         f_prime = torch.autograd.grad(logp_net(x_k).sum(), [x_k], retain_graph=True)[0]
         x_k.data += step_size * f_prime + sigma * torch.randn_like(x_k)
@@ -67,31 +160,59 @@ def short_run_mcmc(logp_net, x_init, k, sigma, step_size=None):
 
 def get_data(args):
     if args.data == "mnist":
-        transform = tr.Compose([tr.Resize(args.img_size), tr.ToTensor(), lambda x: (x > .5).float().view(-1)])
-        train_data = torchvision.datasets.MNIST(root="../data", train=True, transform=transform, download=True)
-        test_data = torchvision.datasets.MNIST(root="../data", train=False, transform=transform, download=True)
-        train_loader = DataLoader(train_data, args.batch_size, shuffle=True, drop_last=True)
-        test_loader = DataLoader(test_data, args.batch_size, shuffle=True, drop_last=True)
+        transform = tr.Compose(
+            [
+                tr.Resize(args.img_size),
+                tr.ToTensor(),
+                lambda x: (x > 0.5).float().view(-1),
+            ]
+        )
+        train_data = torchvision.datasets.MNIST(
+            root="../data", train=True, transform=transform, download=True
+        )
+        test_data = torchvision.datasets.MNIST(
+            root="../data", train=False, transform=transform, download=True
+        )
+        train_loader = DataLoader(
+            train_data, args.batch_size, shuffle=True, drop_last=True
+        )
+        test_loader = DataLoader(
+            test_data, args.batch_size, shuffle=True, drop_last=True
+        )
         sqrt = lambda x: int(torch.sqrt(torch.Tensor([x])))
-        plot = lambda p, x: torchvision.utils.save_image(x.view(x.size(0), 1, args.img_size, args.img_size),
-                                                         p, normalize=True, nrow=sqrt(x.size(0)))
+        plot = lambda p, x: torchvision.utils.save_image(
+            x.view(x.size(0), 1, args.img_size, args.img_size),
+            p,
+            normalize=True,
+            nrow=sqrt(x.size(0)),
+        )
         encoder = None
         viz = None
 
     elif args.data_file is not None:
-        with open(args.data_file, 'rb') as f:
+        with open(args.data_file, "rb") as f:
             x = pickle.load(f)
         x = torch.tensor(x).float()
         train_data = TensorDataset(x)
-        train_loader = DataLoader(train_data, args.batch_size, shuffle=True, drop_last=True)
+        train_loader = DataLoader(
+            train_data, args.batch_size, shuffle=True, drop_last=True
+        )
         test_loader = train_loader
         viz = None
         if args.model == "lattice_ising" or args.model == "lattice_ising_2d":
-            plot = lambda p, x: torchvision.utils.save_image(x.view(x.size(0), 1, args.dim, args.dim),
-                                                             p, normalize=False, nrow=int(x.size(0) ** .5))
+            plot = lambda p, x: torchvision.utils.save_image(
+                x.view(x.size(0), 1, args.dim, args.dim),
+                p,
+                normalize=False,
+                nrow=int(x.size(0) ** 0.5),
+            )
         elif args.model == "lattice_potts":
-            plot = lambda p, x: torchvision.utils.save_image(x.view(x.size(0), args.dim, args.dim, 3).transpose(3, 1),
-                                                             p, normalize=False, nrow=int(x.size(0) ** .5))
+            plot = lambda p, x: torchvision.utils.save_image(
+                x.view(x.size(0), args.dim, args.dim, 3).transpose(3, 1),
+                p,
+                normalize=False,
+                nrow=int(x.size(0) ** 0.5),
+            )
         else:
             plot = lambda p, x: None
     else:
@@ -103,7 +224,9 @@ def get_data(args):
 def generate_data(args):
     if args.data_model == "lattice_potts":
         model = rbm.LatticePottsModel(args.dim, args.n_state, args.sigma)
-        sampler = samplers.PerDimMetropolisSampler(model.data_dim, args.n_out, rand=False)
+        sampler = samplers.PerDimMetropolisSampler(
+            model.data_dim, args.n_out, rand=False
+        )
     elif args.data_model == "lattice_ising":
         model = rbm.LatticeIsingModel(args.dim, args.sigma)
         sampler = samplers.PerDimGibbsSampler(model.data_dim, rand=False)
@@ -133,14 +256,15 @@ def generate_data(args):
 
 def load_synthetic(mat_file, batch_size):
     import scipy.io
+
     mat = scipy.io.loadmat(mat_file)
-    ground_truth_J = mat['eij']
-    ground_truth_h = mat['hi']
-    ground_truth_C = mat['C']
-    q = mat['q']
+    ground_truth_J = mat["eij"]
+    ground_truth_h = mat["hi"]
+    ground_truth_C = mat["C"]
+    q = mat["q"]
     n_out = q[0, 0]
 
-    x_int = mat['sample']
+    x_int = mat["sample"]
     n_samples, dim = x_int.shape
 
     x_int = torch.tensor(x_int).long() - 1
@@ -156,13 +280,19 @@ def load_synthetic(mat_file, batch_size):
     j = J
     jt = j.transpose(0, 1).transpose(2, 3)
     ground_truth_J = (j + jt) / 2
-    return train_loader, test_loader, x, \
-           torch.tensor(ground_truth_J), torch.tensor(ground_truth_h), torch.tensor(ground_truth_C)
-
+    return (
+        train_loader,
+        test_loader,
+        x,
+        torch.tensor(ground_truth_J),
+        torch.tensor(ground_truth_h),
+        torch.tensor(ground_truth_C),
+    )
 
 
 def load_real_protein(args):
     from data_utils import Alignment, load_distmap, MyDCA, map_matrix
+
     a2m = {
         "BPT1_BOVIN": f"{args.data_root}/BPT1_BOVIN/BPT1_BOVIN_full_b03.a2m",
         "CADH1_HUMAN": f"{args.data_root}/CADH1_HUMAN/CADH1_HUMAN_full_b02.a2m",
@@ -233,26 +363,24 @@ def load_real_protein(args):
     D = len(aln.alphabet)
     print("Raw Data size {}".format((L, D)))
 
-
     dca = MyDCA(aln)
-    #dca.alignment.set_weights()
-    #print(dca.alignment.weights.sum(), "MY DCA SUM")
+    # dca.alignment.set_weights()
+    # print(dca.alignment.weights.sum(), "MY DCA SUM")
     L = dca.alignment.L
     D = len(dca.alignment.alphabet)
     x_int = torch.from_numpy(dca.int_matrix()).float()
     x_oh = torch.nn.functional.one_hot(x_int.long(), D).float()
     print("Filtered Data size {}".format((L, D)))
 
-
     J = -distmap_intra.dist_matrix
     J = J + args.contact_cutoff
-    J[J < 0] = 0.
-    J[np.isnan(J)] = 0.  # treat unobserved values as just having no contact
+    J[J < 0] = 0.0
+    J[np.isnan(J)] = 0.0  # treat unobserved values as just having no contact
     ind = np.diag_indices(J.shape[0])
-    J[ind] = 0.
+    J[ind] = 0.0
     C = np.copy(J)
-    C[C > 0] = 1.
-    C[C <= 0] = 0.
+    C[C > 0] = 1.0
+    C[C <= 0] = 0.0
     print("Done")
     print("J size = {}".format(J.shape))
 
@@ -261,16 +389,20 @@ def load_real_protein(args):
         print("Generating weights")
         dca.alignment.set_weights()
         weights = dca.alignment.weights
-        with open(weight_file, 'wb') as f:
+        with open(weight_file, "wb") as f:
             pickle.dump(weights, f)
     else:
         print("Loading weights")
-        with open(weight_file, 'rb') as f:
+        with open(weight_file, "rb") as f:
             weights = pickle.load(f)
 
     weights = torch.tensor(weights).float()
     print("Done")
-    print("Dataset has {} examples, sum weights are {}".format(weights.size(0), weights.sum()))
+    print(
+        "Dataset has {} examples, sum weights are {}".format(
+            weights.size(0), weights.sum()
+        )
+    )
     print("Scaling up by {}".format(float(weights.size(0)) / weights.sum()))
     weights *= float(weights.size(0)) / weights.sum()
     print("Distmap size {}".format(J.shape))
@@ -280,8 +412,10 @@ def load_real_protein(args):
     test_loader = train_loader
 
     # pull indices from distance map
-    #dm_indices = list(torch.tensor(np.array(distmap_intra.residues_j.id).astype(int) - 1).numpy())
-    dm_indices = list(torch.tensor(np.array(distmap_intra.residues_j.id).astype(int)).numpy())
+    # dm_indices = list(torch.tensor(np.array(distmap_intra.residues_j.id).astype(int) - 1).numpy())
+    dm_indices = list(
+        torch.tensor(np.array(distmap_intra.residues_j.id).astype(int)).numpy()
+    )
     print(dm_indices)
     dca_indices = dca.index_list
     print(dca_indices)
@@ -309,10 +443,20 @@ def load_real_protein(args):
     print("New size: {}".format(C.shape))
     dca_int_indices = torch.tensor(dca_int_indices).long()
     print(dca_int_indices)
-    return train_loader, test_loader, x_oh, num_ecs, torch.tensor(J), torch.tensor(C), dca_int_indices
+    return (
+        train_loader,
+        test_loader,
+        x_oh,
+        num_ecs,
+        torch.tensor(J),
+        torch.tensor(C),
+        dca_int_indices,
+    )
+
 
 def load_ingraham(args):
     from data_utils import Alignment, map_matrix
+
     with open("{}/PF00018.a2m".format(args.data_root), "r") as infile:
         aln = Alignment.from_file(infile, format="fasta")
 
@@ -326,12 +470,16 @@ def load_ingraham(args):
 
     aln.set_weights()
     weights = torch.tensor(aln.weights).float()
-    print("Dataset has {} examples, sum weights are {}".format(weights.size(0), weights.sum()))
+    print(
+        "Dataset has {} examples, sum weights are {}".format(
+            weights.size(0), weights.sum()
+        )
+    )
     print("Scaling up by {}".format(float(weights.size(0)) / weights.sum()))
     weights *= float(weights.size(0)) / weights.sum()
 
-    with open("{}/PF00018_summary.txt".format(args.data_root), 'r') as f:
-        lines = [line.strip().split('\t') for line in f.readlines()]
+    with open("{}/PF00018_summary.txt".format(args.data_root), "r") as f:
+        lines = [line.strip().split("\t") for line in f.readlines()]
         X = [int(line[0]) for line in lines]
         Y = [int(line[1]) for line in lines]
         M = [float(line[5]) for line in lines]
@@ -340,12 +488,12 @@ def load_ingraham(args):
             D[x - 1, y - 1] = m
             J = -(D + D.T)
             J = J + args.contact_cutoff
-            J[J < 0] = 0.
+            J[J < 0] = 0.0
             ind = np.diag_indices(J.shape[0])
-            J[ind] = 0.
+            J[ind] = 0.0
             C = np.copy(J)
-            C[C > 0] = 1.
-            C[C <= 0] = 0.
+            C[C > 0] = 1.0
+            C[C <= 0] = 0.0
 
     print("Distmap size {}".format(J.shape))
 
@@ -354,4 +502,3 @@ def load_ingraham(args):
     test_loader = train_loader
 
     return train_loader, test_loader, x_oh, 200, torch.tensor(J), torch.tensor(C)
-

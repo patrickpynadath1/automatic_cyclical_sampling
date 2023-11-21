@@ -19,7 +19,7 @@ class AISModel(nn.Module):
 def evaluate(model, init_dist, sampler,
              train_loader, val_loader, test_loader,
              preprocess, device,
-             n_iters, n_samples, steps_per_iter=1, viz_every=100):
+             n_iters, n_samples, steps_per_iter=1, viz_every=100, is_cyclical=False):
 
     model = AISModel(model, init_dist)
 
@@ -45,7 +45,10 @@ def evaluate(model, init_dist, sampler,
         # update samples
         model_k = lambda x: model(x, beta=beta_k)
         for d in range(steps_per_iter):
-            samples = sampler.step(samples.detach(), model_k).detach()
+            if is_cyclical:
+                samples = sampler.step(samples.detach(), model_k, d).detach()
+            else:
+                samples = sampler.step(samples.detach(), model_k).detach()
 
         if (itr + 1) % viz_every == 0:
             gen_samples.append(samples.cpu().detach())

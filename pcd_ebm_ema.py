@@ -7,11 +7,11 @@ import block_samplers
 import torch.nn as nn
 import os
 import torchvision
-device = torch.device('cuda:' + str(0) if torch.cuda.is_available() else 'cpu')
 import vamp_utils
 import ais
 import copy
 import time
+import pickle
 
 
 def makedirs(dirname):
@@ -30,35 +30,96 @@ def get_sampler(args):
         elif args.sampler == "rand_gibbs":
             sampler = samplers.PerDimGibbsSampler(data_dim, rand=True)
         elif args.sampler.startswith("bg-"):
-            block_size = int(args.sampler.split('-')[1])
+            block_size = int(args.sampler.split("-")[1])
             sampler = block_samplers.BlockGibbsSampler(data_dim, block_size)
         elif args.sampler.startswith("hb-"):
-            block_size, hamming_dist = [int(v) for v in args.sampler.split('-')[1:]]
-            sampler = block_samplers.HammingBallSampler(data_dim, block_size, hamming_dist)
+            block_size, hamming_dist = [int(v) for v in args.sampler.split("-")[1:]]
+            sampler = block_samplers.HammingBallSampler(
+                data_dim, block_size, hamming_dist
+            )
         elif args.sampler == "gwg":
-            sampler = samplers.DiffSampler(data_dim, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2.)
+            sampler = samplers.DiffSampler(
+                data_dim,
+                1,
+                fixed_proposal=False,
+                approx=True,
+                multi_hop=False,
+                temp=2.0,
+            )
         elif args.sampler.startswith("gwg-"):
-            n_hops = int(args.sampler.split('-')[1])
-            sampler = samplers.MultiDiffSampler(data_dim, 1, approx=True, temp=2., n_samples=n_hops)
+            n_hops = int(args.sampler.split("-")[1])
+            sampler = samplers.MultiDiffSampler(
+                data_dim, 1, approx=True, temp=2.0, n_samples=n_hops
+            )
         elif args.sampler == "dmala":
-            sampler = samplers.LangevinSampler(data_dim, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=args.step_size, mh=True)
+            sampler = samplers.LangevinSampler(
+                data_dim,
+                1,
+                fixed_proposal=False,
+                approx=True,
+                multi_hop=False,
+                temp=1.0,
+                step_size=args.step_size,
+                mh=True,
+            )
 
         elif args.sampler == "dula":
-            sampler = samplers.LangevinSampler(data_dim, 1,
-                                           fixed_proposal=False, approx=True, multi_hop=False, temp=2., step_size=args.step_size, mh=False)
+            sampler = samplers.LangevinSampler(
+                data_dim,
+                1,
+                fixed_proposal=False,
+                approx=True,
+                multi_hop=False,
+                temp=1.0,
+                step_size=args.step_size,
+                mh=False,
+            )
 
-        
+        elif args.sampler == "cyc_dmala":
+            sampler = samplers.CyclicalLangevinSampler(
+                data_dim,
+                num_cycles=args.num_cycles,
+                num_iters=args.sampling_steps,
+                fixed_proposal=False,
+                approx=True,
+                multi_hop=False,
+                temp=2.0,
+                mean_stepsize=args.step_size,
+                mh=True,
+                n_steps=1,
+                initial_balancing_constant=args.initial_balancing_constant,
+                device=args.device,
+            )
+
+        elif args.sampler == "cyc_dula":
+            sampler = samplers.CyclicalLangevinSampler(
+                data_dim,
+                num_cycles=args.num_cycles,
+                num_iters=args.sampling_steps,
+                fixed_proposal=False,
+                approx=True,
+                multi_hop=False,
+                temp=2.0,
+                n_steps=1,
+                mean_stepsize=args.step_size,
+                mh=False,
+                initial_balancing_constant=args.initial_balancing_constant,
+                device=args.device,
+            )
+
         else:
             raise ValueError("Invalid sampler...")
     else:
         if args.sampler == "gibbs":
-            sampler = samplers.PerDimMetropolisSampler(data_dim, int(args.n_out), rand=False)
+            sampler = samplers.PerDimMetropolisSampler(
+                data_dim, int(args.n_out), rand=False
+            )
         elif args.sampler == "rand_gibbs":
-            sampler = samplers.PerDimMetropolisSampler(data_dim, int(args.n_out), rand=True)
+            sampler = samplers.PerDimMetropolisSampler(
+                data_dim, int(args.n_out), rand=True
+            )
         elif args.sampler == "gwg":
-            sampler = samplers.DiffSamplerMultiDim(data_dim, 1, approx=True, temp=2.)
+            sampler = samplers.DiffSamplerMultiDim(data_dim, 1, approx=True, temp=2.0)
         else:
             raise ValueError("invalid sampler")
     return sampler
@@ -75,7 +136,7 @@ class EBM(nn.Module):
 
     def forward(self, x):
         if self.mean is None:
-            bd = 0.
+            bd = 0.0
         else:
             base_dist = torch.distributions.Bernoulli(probs=self.mean)
             bd = base_dist.log_prob(x).sum(-1)
@@ -86,21 +147,25 @@ class EBM(nn.Module):
 
 def main(args):
     makedirs(args.save_dir)
-    logger = open("{}/log.txt".format(args.save_dir), 'w')
+    logger = open("{}/log.txt".format(args.save_dir), "w")
 
     def my_print(s):
         print(s)
-        logger.write(str(s) + '\n')
+        logger.write(str(s) + "\n")
         logger.flush()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-
+    torch.cuda.manual_seed_all(args.seed)
     # load data
     train_loader, val_loader, test_loader, args = vamp_utils.load_dataset(args)
-    plot = lambda p, x: torchvision.utils.save_image(x.view(x.size(0),
-                                                            args.input_size[0], args.input_size[1], args.input_size[2]),
-                                                     p, normalize=True, nrow=int(x.size(0) ** .5))
+    plot = lambda p, x: torchvision.utils.save_image(
+        x.view(x.size(0), args.input_size[0], args.input_size[1], args.input_size[2]),
+        p,
+        normalize=True,
+        nrow=int(x.size(0) ** 0.5),
+    )
+
     def preprocess(data):
         if args.dynamic_binarization:
             return torch.bernoulli(data)
@@ -109,25 +174,25 @@ def main(args):
 
     # make model
     if args.model.startswith("mlp-"):
-        nint = int(args.model.split('-')[1])
+        nint = int(args.model.split("-")[1])
         net = mlp.mlp_ebm(np.prod(args.input_size), nint)
     elif args.model.startswith("resnet-"):
-        nint = int(args.model.split('-')[1])
+        nint = int(args.model.split("-")[1])
         net = mlp.ResNetEBM(nint)
     elif args.model.startswith("cnn-"):
-        nint = int(args.model.split('-')[1])
+        nint = int(args.model.split("-")[1])
         net = mlp.MNISTConvNet(nint)
     else:
         raise ValueError("invalid model definition")
 
-
     # get data mean and initialize buffer
+
     init_batch = []
     for x, _ in train_loader:
         init_batch.append(preprocess(x))
     init_batch = torch.cat(init_batch, 0)
     eps = 1e-2
-    init_mean = init_batch.mean(0) * (1. - 2 * eps) + eps
+    init_mean = init_batch.mean(0) * (1.0 - 2 * eps) + eps
     if args.buffer_init == "mean":
         if args.input_type == "binary":
             init_dist = torch.distributions.Bernoulli(probs=init_mean)
@@ -141,7 +206,9 @@ def main(args):
         init_inds = np.random.choice(all_inds, args.buffer_size)
         buffer = init_batch[init_inds]
     elif args.buffer_init == "uniform":
-        buffer = (torch.ones(args.buffer_size, *init_batch.size()[1:]) * .5).bernoulli()
+        buffer = (
+            torch.ones(args.buffer_size, *init_batch.size()[1:]) * 0.5
+        ).bernoulli()
     else:
         raise ValueError("Invalid init")
 
@@ -150,31 +217,31 @@ def main(args):
     else:
         model = EBM(net)
 
-    optimizer = torch.optim.Adam(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(
+        model.parameters(), lr=args.lr, weight_decay=args.weight_decay
+    )
 
     ema_model = copy.deepcopy(model)
 
     if args.ckpt_path is not None:
         d = torch.load(args.ckpt_path)
-        model.load_state_dict(d['model'])
-        ema_model.load_state_dict(d['ema_model'])
-        #optimizer.load_state_dict(d['optimizer'])
-        buffer = d['buffer']
-
-
+        model.load_state_dict(d["model"])
+        ema_model.load_state_dict(d["ema_model"])
+        # optimizer.load_state_dict(d['optimizer'])
+        buffer = d["buffer"]
 
     # move to cuda
     model.to(device)
     ema_model.to(device)
-
-    # get sampler
     sampler = get_sampler(args)
-
+    model_name = sampler.get_name()
+    cur_dir = f"{args.save_dir}/{model_name}"
+    os.makedirs(cur_dir)
     my_print(device)
     my_print(model)
     my_print(buffer.size())
     my_print(sampler)
-
+    print(sampler.step_size)
     itr = 0
     best_val_ll = -np.inf
     hop_dists = []
@@ -188,22 +255,53 @@ def main(args):
             if itr < args.warmup_iters:
                 lr = args.lr * float(itr) / args.warmup_iters
                 for param_group in optimizer.param_groups:
-                    param_group['lr'] = lr
+                    param_group["lr"] = lr
 
             x = preprocess(x[0].to(device).requires_grad_())
 
             # choose random inds from buffer
-            buffer_inds = sorted(np.random.choice(all_inds, args.batch_size, replace=False))
+            buffer_inds = sorted(
+                np.random.choice(all_inds, args.batch_size, replace=False)
+            )
             x_buffer = buffer[buffer_inds].to(device)
             reinit = reinit_dist.sample((args.batch_size,)).to(device)
             x_reinit = init_dist.sample((args.batch_size,)).to(device)
-            x_fake = x_reinit * reinit[:, None] + x_buffer * (1. - reinit[:, None])
-
+            x_fake = x_reinit * reinit[:, None] + x_buffer * (1.0 - reinit[:, None])
+            if args.adaptive and itr % 500 == 0:
+                sampler.run_burn_in_bb_modified(x_fake.detach(), model)
+                print(sampler.step_sizes)
+                print(sampler.balancing_constants)
             hops = []  # keep track of how much the sampelr moves particles around
             st = time.time()
-            for k in range(args.sampling_steps):
-                x_fake_new = sampler.step(x_fake.detach(), model).detach()
-                h = (x_fake_new != x_fake).float().view(x_fake_new.size(0), -1).sum(-1).mean().item()
+            sampling_steps = args.sampling_steps
+
+            if args.use_manual_EE:
+                if itr % args.steps_per_cycle == 0:
+                    # at the very first iteration within a cycle,
+                    # use the big step sampling steps
+                    sampling_steps = args.big_step_sampling_steps
+                    sampler.mh = False
+                else:
+                    if "dmala" in args.sampler:
+                        sampler.mh = True
+            for k in range(sampling_steps):
+                if args.sampler in ["cyc_dula", "cyc_dmala"]:
+                    if args.use_manual_EE:
+                        x_fake_new = sampler.step(
+                            x_fake.detach(), model, itr % args.steps_per_cycle
+                        ).detach()
+                    else:
+                        x_fake_new = sampler.step(x_fake.detach(), model, k).detach()
+                else:
+                    x_fake_new = sampler.step(x_fake.detach(), model).detach()
+                h = (
+                    (x_fake_new != x_fake)
+                    .float()
+                    .view(x_fake_new.size(0), -1)
+                    .sum(-1)
+                    .mean()
+                    .item()
+                )
                 hops.append(h)
                 x_fake = x_fake_new
             st = time.time() - st
@@ -214,16 +312,23 @@ def main(args):
 
             logp_real = model(x).squeeze()
             if args.p_control > 0:
-                grad_ld = torch.autograd.grad(logp_real.sum(), x,
-                                              create_graph=True)[0].flatten(start_dim=1).norm(2, 1)
-                grad_reg = (grad_ld ** 2. / 2.).mean() * args.p_control
+                grad_ld = (
+                    torch.autograd.grad(logp_real.sum(), x, create_graph=True)[0]
+                    .flatten(start_dim=1)
+                    .norm(2, 1)
+                )
+                grad_reg = (grad_ld**2.0 / 2.0).mean() * args.p_control
             else:
                 grad_reg = 0.0
 
             logp_fake = model(x_fake).squeeze()
 
             obj = logp_real.mean() - logp_fake.mean()
-            loss = -obj + grad_reg + args.l2 * ((logp_real ** 2.).mean() + (logp_fake ** 2.).mean())
+            loss = (
+                -obj
+                + grad_reg
+                + args.l2 * ((logp_real**2.0).mean() + (logp_fake**2.0).mean())
+            )
 
             optimizer.zero_grad()
             loss.backward()
@@ -231,85 +336,191 @@ def main(args):
 
             # update ema_model
             for p, ema_p in zip(model.parameters(), ema_model.parameters()):
-                ema_p.data = ema_p.data * args.ema + p.data * (1. - args.ema)
+                ema_p.data = ema_p.data * args.ema + p.data * (1.0 - args.ema)
 
             if itr % args.print_every == 0:
-                my_print("({}) | ({}/iter) cur lr = {:.4f} |log p(real) = {:.4f}, "
-                         "log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}".format(itr, st, lr, logp_real.mean().item(),
-                                                                                     logp_fake.mean().item(), obj.item(),
-                                                                                     hop_dists[-1]))
+                my_print(
+                    "({}) | ({}/iter) cur lr = {:.4f} |log p(real) = {:.4f}, "
+                    "log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}, a_s = {:.4f}".format(
+                        itr,
+                        st,
+                        lr,
+                        logp_real.mean().item(),
+                        logp_fake.mean().item(),
+                        obj.item(),
+                        hop_dists[-1],
+                        np.mean(sampler.a_s[-10:]),
+                    )
+                )
             if itr % args.viz_every == 0:
                 plot("{}/data_{}.png".format(args.save_dir, itr), x.detach().cpu())
                 plot("{}/buffer_{}.png".format(args.save_dir, itr), x_fake)
 
-
             if (itr + 1) % args.eval_every == 0:
-                logZ, train_ll, val_ll, test_ll, ais_samples = ais.evaluate(ema_model, init_dist, sampler,
-                                                                            train_loader, val_loader, test_loader,
-                                                                            preprocess, device,
-                                                                            args.eval_sampling_steps,
-                                                                            args.test_batch_size)
-                my_print("EMA Train log-likelihood ({}): {}".format(itr, train_ll.item()))
+                # changed so that the sampler used to evaluate the model is the SAME regardless
+                # of the sampler used to train the model
+                data_dim = np.prod(args.input_size)
+                eval_sampler = samplers.DiffSampler(
+                    data_dim,
+                    1,
+                    fixed_proposal=False,
+                    approx=True,
+                    multi_hop=False,
+                    temp=2.0,
+                )
+                logZ, train_ll, val_ll, test_ll, ais_samples = ais.evaluate(
+                    ema_model,
+                    init_dist,
+                    eval_sampler,
+                    train_loader,
+                    val_loader,
+                    test_loader,
+                    preprocess,
+                    device,
+                    args.eval_sampling_steps,
+                    args.test_batch_size,
+                    is_cyclical=False,
+                )
+                my_print(
+                    "EMA Train log-likelihood ({}): {}".format(itr, train_ll.item())
+                )
                 my_print("EMA Valid log-likelihood ({}): {}".format(itr, val_ll.item()))
                 my_print("EMA Test log-likelihood ({}): {}".format(itr, test_ll.item()))
                 test_ll_list.append(test_ll.item())
                 for _i, _x in enumerate(ais_samples):
-                    plot("{}/EMA_sample_{}_{}_{}_{}_{}.png".format(args.save_dir, args.dataset_name,args.sampler,args.step_size,itr, _i), _x)
+                    plot(
+                        "{}/EMA_sample_{}_{}_{}_{}_{}.png".format(
+                            args.save_dir,
+                            args.dataset_name,
+                            args.sampler,
+                            args.step_size,
+                            itr,
+                            _i,
+                        ),
+                        _x,
+                    )
 
                 model.cpu()
                 d = {}
-                d['model'] = model.state_dict()
-                d['ema_model'] = ema_model.state_dict()
-                d['buffer'] = buffer
-                d['optimizer'] = optimizer.state_dict()
+                d["model"] = model.state_dict()
+                d["ema_model"] = ema_model.state_dict()
+                d["buffer"] = buffer
+                d["optimizer"] = optimizer.state_dict()
                 if val_ll.item() > 0:
                     exit()
                 if val_ll.item() > best_val_ll:
                     best_val_ll = val_ll.item()
                     my_print("Best valid likelihood")
-                    torch.save(d, "{}/best_ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,args.sampler,args.step_size))
+                    if args.sampler in ["cyc_dula", "cyc_dmala", "dula", "dmala"]:
+                        if args.use_manual_EE:
+                            sampler_name = f"{args.sampler}_{args.big_step}_{args.small_step}_{args.sampling_steps}_{args.steps_per_cycle}"
+                        else:
+                            sampler_name = sampler.get_name()
+                        if args.sampler in ["dmala", "cyc_dmala"]:
+                            pickle.dump(
+                                sampler.a_s,
+                                open(
+                                    f"{args.save_dir}/{sampler_name}_a_s.pickle", "wb"
+                                ),
+                            )
+                        torch.save(
+                            d,
+                            "{}/best_ckpt_{}_{}_{}.pt".format(
+                                args.save_dir,
+                                args.dataset_name,
+                                sampler_name,
+                                args.step_size,
+                            ),
+                        )
+                    else:
+                        torch.save(
+                            d,
+                            "{}/best_ckpt_{}_{}_{}.pt".format(
+                                args.save_dir,
+                                args.dataset_name,
+                                args.sampler,
+                                args.step_size,
+                            ),
+                        )
+
                 else:
-                    torch.save(d, "{}/ckpt_{}_{}_{}.pt".format(args.save_dir,args.dataset_name,args.sampler,args.step_size))
+                    torch.save(
+                        d,
+                        "{}/ckpt_{}_{}_{}.pt".format(
+                            args.save_dir,
+                            args.dataset_name,
+                            args.sampler,
+                            args.step_size,
+                        ),
+                    )
 
                 model.to(device)
 
             itr += 1
-    np.save("{}/test_ll_{}_{}_{}.npy".format(args.save_dir,args.dataset_name,args.sampler,args.step_size),test_ll_list)
+    np.save(
+        "{}/test_ll_{}_{}_{}.npy".format(
+            args.save_dir, args.dataset_name, args.sampler, args.step_size
+        ),
+        test_ll_list,
+    )
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     # data
-    parser.add_argument('--save_dir', type=str, default="./figs/ebm")
-    parser.add_argument('--dataset_name', type=str, default='static_mnist')
-    parser.add_argument('--ckpt_path', type=str, default=None)
+    parser.add_argument("--save_dir", type=str, default="./figs/ebm")
+    parser.add_argument("--dataset_name", type=str, default="static_mnist")
+    parser.add_argument("--ckpt_path", type=str, default=None)
     # data generation
-    parser.add_argument('--n_out', type=int, default=3)     # potts
+    parser.add_argument("--n_out", type=int, default=3)  # potts
     # models
-    parser.add_argument('--model', type=str, default='mlp-256')
-    parser.add_argument('--base_dist', action='store_true')
-    parser.add_argument('--p_control', type=float, default=0.0)
-    parser.add_argument('--l2', type=float, default=0.0)
-    parser.add_argument('--ema', type=float, default=0.999)
+    parser.add_argument("--model", type=str, default="mlp-256")
+    parser.add_argument("--base_dist", action="store_true")
+    parser.add_argument("--p_control", type=float, default=0.0)
+    parser.add_argument("--l2", type=float, default=0.0)
+    parser.add_argument("--ema", type=float, default=0.999)
     # mcmc
-    parser.add_argument('--sampler', type=str, default='gibbs')
-    parser.add_argument('--seed', type=int, default=1234567)
-    parser.add_argument('--sampling_steps', type=int, default=100)
-    parser.add_argument('--reinit_freq', type=float, default=0.0)
-    parser.add_argument('--eval_sampling_steps', type=int, default=100)
-    parser.add_argument('--buffer_size', type=int, default=1000)
-    parser.add_argument('--buffer_init', type=str, default='mean')
-    parser.add_argument('--step_size', type=float, default=0.08)
+    parser.add_argument("--sampler", type=str, default="gibbs")
+    parser.add_argument("--seed", type=int, default=1234567)
+    parser.add_argument("--sampling_steps", type=int, default=100)
+    parser.add_argument("--reinit_freq", type=float, default=0.0)
+    parser.add_argument("--eval_sampling_steps", type=int, default=100)
+    parser.add_argument("--buffer_size", type=int, default=1000)
+    parser.add_argument("--buffer_init", type=str, default="mean")
+    parser.add_argument("--step_size", type=float, default=0.08)
     # training
-    parser.add_argument('--n_iters', type=int, default=100000)
-    parser.add_argument('--warmup_iters', type=int, default=-1)
-    parser.add_argument('--n_epochs', type=int, default=100)
-    parser.add_argument('--batch_size', type=int, default=100)
-    parser.add_argument('--test_batch_size', type=int, default=100)
-    parser.add_argument('--print_every', type=int, default=100)
-    parser.add_argument('--viz_every', type=int, default=1000)
-    parser.add_argument('--eval_every', type=int, default=1000)
-    parser.add_argument('--lr', type=float, default=.001)
-    parser.add_argument('--weight_decay', type=float, default=.0)
-
+    parser.add_argument("--adaptive", action="store_true")
+    parser.add_argument("--n_iters", type=int, default=100000)
+    parser.add_argument("--warmup_iters", type=int, default=-1)
+    parser.add_argument("--n_epochs", type=int, default=100)
+    parser.add_argument("--batch_size", type=int, default=100)
+    parser.add_argument("--test_batch_size", type=int, default=100)
+    parser.add_argument("--print_every", type=int, default=100)
+    parser.add_argument("--viz_every", type=int, default=1000)
+    parser.add_argument("--eval_every", type=int, default=1000)
+    parser.add_argument("--lr", type=float, default=0.001)
+    parser.add_argument("--weight_decay", type=float, default=0.0)
+    parser.add_argument("--num_cycles", type=int, default=2)
+    parser.add_argument("--include_exploration", action="store_true")
+    parser.add_argument("--use_balancing_constant", action="store_true")
+    parser.add_argument("--initial_balancing_constant", type=float, default=1.0)
+    parser.add_argument("--use_outer_loop", action="store_true")
+    parser.add_argument("--steps_per_cycle", type=int, default=10)
+    parser.add_argument("--use_manual_EE", action="store_true")
+    parser.add_argument("--big_step", type=float, default=1.0)
+    parser.add_argument("--small_step", type=float, default=0.1)
+    parser.add_argument("--big_step_sampling_steps", type=int, default=5)
+    parser.add_argument("--cuda_id", type=int, default=0)
     args = parser.parse_args()
+
+    device = torch.device(
+        "cuda:" + str(args.cuda_id) if torch.cuda.is_available() else "cpu"
+    )
     args.device = device
+    if args.use_outer_loop:
+        args.n_steps = args.steps_per_cycle
+        args.outer_cycles = args.num_cycles
+        args.num_cycles = 1
+    else:
+        args.n_steps = args.sampling_steps
     main(args)
