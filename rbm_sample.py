@@ -118,6 +118,7 @@ def main(args):
     times = {}
     chains = {}
     chain = []
+    sample_var = {}
     x0 = model.init_dist.sample((args.n_test_samples,)).to(device)
     temps = args.samplers
     for temp in temps:
@@ -155,7 +156,7 @@ def main(args):
         cur_dir = f"{args.save_dir}/rbm_iter_{args.rbm_train_iter}/{model_name}"
         os.makedirs(cur_dir, exist_ok=True)
         x = x0.clone().detach()
-
+        sample_var[temp] = []
         log_mmds[temp] = []
         ars[temp] = []
         hops[temp] = []
@@ -185,7 +186,9 @@ def main(args):
                 xhat = sampler.step(x.detach(), model).detach()
             cur_time += time.time() - st
             cur_hops = (x != xhat).float().sum(-1).mean().item()
-
+            cur_sample_var = torch.var(xhat, dim=1)
+            mean_var = torch.mean(cur_sample_var).detach().cpu().item()
+            sample_var[temp].append(mean_var)
             # update trajectory
             x = xhat
 
@@ -196,9 +199,18 @@ def main(args):
                     xc = x[0][None]
                     h = (xc != gt_samples).float().sum(-1)
                     chain.append(h.detach().cpu().numpy()[None])
-
-            if i % args.viz_every == 0 and plot is not None:
+            # if we are in the last cycle, just plot everything
+            if (
+                i >= args.n_steps - (int(args.n_steps / args.num_cycles))
+                and plot is not None
+            ):
                 plot(f"{cur_dir}/sample_itr_{i}.png".format(args.save_dir, temp, i), x)
+            else:
+                if i % args.viz_every == 0 and plot is not None:
+                    plot(
+                        f"{cur_dir}/sample_itr_{i}.png".format(args.save_dir, temp, i),
+                        x,
+                    )
 
             if i % args.print_every == print_every_i:
                 hard_samples = x
@@ -224,6 +236,9 @@ def main(args):
 
             with open(f"{cur_dir}/ess.pickle", "wb") as f:
                 pickle.dump(ess_data, f)
+
+            with open(f"{cur_dir}/sample_var.pickle", "wb") as f:
+                pickle.dump(sample_var[temp], f)
 
             with open(f"{cur_dir}/times.pickle", "wb") as f:
                 pickle.dump(times[temp], f)
