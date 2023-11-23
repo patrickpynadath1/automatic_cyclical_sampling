@@ -247,7 +247,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./figs/rbm_sample")
+    parser.add_argument("--save_dir", type=str, default="./figs/rbm_sample_res")
     parser.add_argument(
         "--data", choices=["mnist", "random"], type=str, default="mnist"
     )
@@ -293,6 +293,12 @@ if __name__ == "__main__":
     parser.add_argument("--burnin_alphamin_decay", type=float, default=0.9)
     parser.add_argument("--burnin_bal_resolution", type=int, default=6)
     parser.add_argument("--use_big", action="store_true")
+
+    # sbc hyper params
+    parser.add_argument("--big_step", type=float, default=0.2)
+    parser.add_argument("--small_step", type=float, default=0.2)
+    parser.add_argument("--small_bal", type=float, default=0.5)
+    parser.add_argument("--big_bal", type=float, default=0.5)
     args = parser.parse_args()
 
     main(args)
