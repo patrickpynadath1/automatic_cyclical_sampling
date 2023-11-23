@@ -40,7 +40,7 @@ def main(args):
     device = torch.device(
         "cuda:" + str(args.cuda_id) if torch.cuda.is_available() else "cpu"
     )
-    seeds = utils.get_rand_seeds(args.seed_file)
+    # seeds = utils.get_rand_seeds(args.seed_file)
 
     # if args.num_seeds == 1:
     #     seeds = [seeds[0]]
