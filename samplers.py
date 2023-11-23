@@ -204,13 +204,13 @@ class CyclicalLangevinSampler(nn.Module):
         initial_balancing_constant=1,
         burnin_adaptive=False,
         burnin_budget=500,
-        burnin_lr = .5,
+        burnin_lr=0.5,
         adapt_alg="twostage_optim",
-        sbc = False, 
-        big_step = None, 
-        big_bal = None, 
-        small_step = None, 
-        small_bal = None
+        sbc=False,
+        big_step=None,
+        big_bal=None,
+        small_step=None,
+        small_bal=None,
     ):
         super().__init__()
         self.device = device
@@ -249,15 +249,18 @@ class CyclicalLangevinSampler(nn.Module):
         self.balancing_constants = self.calc_balancing_constants(
             self.initial_balancing_constant
         )
-        if sbc and big_step and big_bal and small_step and small_bal: 
+        if sbc and big_step and big_bal and small_step and small_bal:
             self.sbc = sbc
-            self.big_step = big_step 
-            self.small_step = small_step 
+            self.big_step = big_step
+            self.small_step = small_step
             self.big_bal = big_bal
-            self.small_bal = small_bal 
-            self.step_sizes = [big_step] + [small_step]*(self.iter_per_cycle - 1)
-            self.balancing_constants = [big_bal] + [small_bal] * (self.iter_per_cycle - 1)
-
+            self.small_bal = small_bal
+            self.step_sizes = [big_step] + [small_step] * (self.iter_per_cycle - 1)
+            self.balancing_constants = [big_bal] + [small_bal] * (
+                self.iter_per_cycle - 1
+            )
+        else:
+            self.sbc = False
         # need two arrays: one for explore step sizes, another for exploit step sizes
 
     def get_name(self):
@@ -265,13 +268,22 @@ class CyclicalLangevinSampler(nn.Module):
             base = "cyc_dmala"
         else:
             base = "cyc_dula"
-        base = f"{base}_cycles_{self.num_cycles}" 
-        if self.burn_in_adaptive:
-            name = base + f"_{self.adapt_alg}_budget_{self.burnin_budget}_lr_{self.burnin_lr}"
-        else: 
-            name = base + f"_stepsize_{self.initial_step_size}_initbal_{self.balancing_constant}"
-        if self.sbc: 
-            name = base + f"cycle_length_{self.iter_per_cycle}_big_s_{self.big_step}_b_{self.big_bal}_small_s_{self.small_step}_b_{self.small_bal}"
+        base = f"{base}_cycles_{self.num_cycles}"
+        if self.burnin_adaptive:
+            name = (
+                base
+                + f"_{self.adapt_alg}_budget_{self.burnin_budget}_lr_{self.burnin_lr}"
+            )
+        else:
+            name = (
+                base
+                + f"_stepsize_{self.initial_step_size}_initbal_{self.balancing_constant}"
+            )
+        if self.sbc:
+            name = (
+                base
+                + f"cycle_length_{self.iter_per_cycle}_big_s_{self.big_step}_b_{self.big_bal}_small_s_{self.small_step}_b_{self.small_bal}"
+            )
         return name
 
     def calc_stepsizes(self, mean_step):

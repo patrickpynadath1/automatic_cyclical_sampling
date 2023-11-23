@@ -14,7 +14,6 @@ import block_samplers
 import time
 from result_storing_utils import *
 import pickle
-import neptune
 
 
 def makedirs(dirname):
@@ -40,9 +39,9 @@ def main(args):
     device = torch.device(
         "cuda:" + str(args.cuda_id) if torch.cuda.is_available() else "cpu"
     )
-    seeds = utils.get_rand_seeds(args.seed_file)
+    # seeds = utils.get_rand_seeds(args.seed_file)
 
-    # if args.num_seeds == 1:
+    # if args.num_seeds == 0:
     #     seeds = [seeds[0]]
     # else:
     #     seeds = seeds[:min(len(seeds), args.num_seeds)]
@@ -247,7 +246,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./figs/rbm_sample")
+    parser.add_argument("--save_dir", type=str, default="./figs/rbm_sample_res")
     parser.add_argument(
         "--data", choices=["mnist", "random"], type=str, default="mnist"
     )
@@ -281,7 +280,7 @@ if __name__ == "__main__":
     parser.add_argument("--initial_balancing_constant", type=float, default=1)
     parser.add_argument("--cuda_id", type=int, default=0)
     parser.add_argument("--burnin_frequency", type=int, default=100)
-    parser.add_argument("--burnin_budget", type=int, default=1000)
+    parser.add_argument("--burnin_budget", type=int, default=500)
     parser.add_argument("--burnin_adaptive", action="store_true")
     parser.add_argument("--burnin_test_steps", type=int, default=10)
     parser.add_argument("--burnin_step_obj", type=str, default="alpha_max")
