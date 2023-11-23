@@ -259,14 +259,15 @@ class CyclicalLangevinSampler(nn.Module):
             self.balancing_constants = [big_bal] + [small_bal] * (self.iter_per_cycle - 1)
 
         # need two arrays: one for explore step sizes, another for exploit step sizes
-
+        else: 
+            self.sbc = False
     def get_name(self):
         if self.mh:
             base = "cyc_dmala"
         else:
             base = "cyc_dula"
         base = f"{base}_cycles_{self.num_cycles}" 
-        if self.burn_in_adaptive:
+        if self.burnin_adaptive:
             name = base + f"_{self.adapt_alg}_budget_{self.burnin_budget}_lr_{self.burnin_lr}"
         else: 
             name = base + f"_stepsize_{self.initial_step_size}_initbal_{self.balancing_constant}"
