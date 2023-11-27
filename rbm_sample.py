@@ -113,8 +113,6 @@ def main(args):
                 digit_energies[i] += d_e
                 digit_counts[i] += total
         digit_energies = [digit_energies[i] / digit_counts[i] for i in range(10)]
-        with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
-            pickle.dump(digit_energies, f)
 
     gt_samples = model.gibbs_sample(
         n_steps=args.gt_steps, n_samples=args.n_samples + args.n_test_samples, plot=True
@@ -136,6 +134,7 @@ def main(args):
     chains = {}
     chain = []
     sample_var = {}
+
     x0 = model.init_dist.sample((args.n_test_samples,)).to(device)
     temps = args.samplers
     for temp in temps:
@@ -262,6 +261,9 @@ def main(args):
 
             with open(f"{cur_dir}/times.pickle", "wb") as f:
                 pickle.dump(times[temp], f)
+            if args.get_base_energies:
+                with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
+                    pickle.dump(digit_energies, f)
             # store_sequential_data(cur_dir, model_name, "log_mmds", log_mmds[temp])
             # store_sequential_data(cur_dir, model_name, "times", times[temp])
             # write_ess_data(
