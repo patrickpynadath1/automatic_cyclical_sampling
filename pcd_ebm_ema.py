@@ -60,6 +60,7 @@ def get_sampler(args):
                 multi_hop=False,
                 temp=1.0,
                 step_size=args.step_size,
+                bal=args.initial_balancing_constant,
                 mh=True,
             )
 
@@ -72,6 +73,7 @@ def get_sampler(args):
                 multi_hop=False,
                 temp=1.0,
                 step_size=args.step_size,
+                bal=args.initial_balancing_constant,
                 mh=False,
             )
 
