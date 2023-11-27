@@ -99,6 +99,23 @@ def main(args):
         model.b_h.data = torch.randn_like(model.b_h.data) * 1.0
         viz = plot = None
 
+    if args.get_base_energies:
+        digit_energies = [0 for i in range(10)]
+        digit_counts = [0 for i in range(10)]
+        for x, y in train_loader:
+            x = x.to(device)
+            d = model.logp_v_unnorm(x)
+            for i in range(10):  # getting the energies and counts for all the digits
+                idx_where = torch.where(y == i, 1.0, 0.0).to(device)
+                total = torch.sum(idx_where).detach().item()
+                d_e = d * idx_where
+                d_e = torch.sum(d_e).detach().item()
+                digit_energies[i] += d_e
+                digit_counts[i] += total
+        digit_energies = [digit_energies[i] / digit_counts[i] for i in range(10)]
+        with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
+            pickle.dump(digit_energies, f)
+
     gt_samples = model.gibbs_sample(
         n_steps=args.gt_steps, n_samples=args.n_samples + args.n_test_samples, plot=True
     )
@@ -192,6 +209,7 @@ def main(args):
             # update trajectory
             x = xhat
 
+            hops[temp].append(cur_hops)
             if i % args.subsample == 0:
                 if args.ess_statistic == "dims":
                     chain.append(x.cpu().numpy()[0][None])
@@ -218,7 +236,6 @@ def main(args):
                 log_stat = stat.log().item()
                 log_mmds[temp].append(log_stat)
                 times[temp].append(cur_time)
-                hops[temp].append(cur_hops)
 
         chain = np.concatenate(chain, 0)
         ess[temp] = get_ess(chain, args.burn_in)
@@ -239,6 +256,9 @@ def main(args):
 
             with open(f"{cur_dir}/sample_var.pickle", "wb") as f:
                 pickle.dump(sample_var[temp], f)
+
+            with open(f"{cur_dir}/hops.pickle", "wb") as f:
+                pickle.dump(hops[temp], f)
 
             with open(f"{cur_dir}/times.pickle", "wb") as f:
                 pickle.dump(times[temp], f)
@@ -314,6 +334,7 @@ if __name__ == "__main__":
     parser.add_argument("--small_step", type=float, default=0.2)
     parser.add_argument("--small_bal", type=float, default=0.5)
     parser.add_argument("--big_bal", type=float, default=0.5)
+    parser.add_argument("--get_base_energies", action="store_true")
     args = parser.parse_args()
 
     main(args)
