@@ -100,19 +100,14 @@ def main(args):
         viz = plot = None
 
     if args.get_base_energies:
-        digit_energies = [0 for i in range(10)]
-        digit_counts = [0 for i in range(10)]
+        digit_energies = []
+        digit_values = []
         for x, y in train_loader:
             x = x.to(device)
             d = model.logp_v_unnorm(x)
-            for i in range(10):  # getting the energies and counts for all the digits
-                idx_where = torch.where(y == i, 1.0, 0.0).to(device)
-                total = torch.sum(idx_where).detach().item()
-                d_e = d * idx_where
-                d_e = torch.sum(d_e).detach().item()
-                digit_energies[i] += d_e
-                digit_counts[i] += total
-        digit_energies = [digit_energies[i] / digit_counts[i] for i in range(10)]
+            digit_energies += list(d.detach().cpu().numpy())
+            digit_values += list(y.cpu().numpy())
+        digit_energy_res = {"energies": digit_energies, "values": digit_values}
 
     gt_samples = model.gibbs_sample(
         n_steps=args.gt_steps, n_samples=args.n_samples + args.n_test_samples, plot=True
@@ -263,7 +258,7 @@ def main(args):
                 pickle.dump(times[temp], f)
             if args.get_base_energies:
                 with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
-                    pickle.dump(digit_energies, f)
+                    pickle.dump(digit_energy_res, f)
             # store_sequential_data(cur_dir, model_name, "log_mmds", log_mmds[temp])
             # store_sequential_data(cur_dir, model_name, "times", times[temp])
             # write_ess_data(
