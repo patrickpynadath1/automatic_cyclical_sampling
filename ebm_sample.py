@@ -9,6 +9,7 @@ import tqdm
 import mlp
 from pcd_ebm_ema import get_sampler, EBM
 import torchvision
+from rbm_sample import get_ess
 
 
 def sqrt(x):
@@ -76,9 +77,12 @@ def main(args):
 
     model = model.to(device)
 
+    # TODO: add in measuring of energies for different digits from rbm sample
+
     # metrics to keep track of:
     energies = []
     hops = []
+    sample_var = []
     if args.burnin_adaptive:
         x_init, burnin_res = sampler.run_adaptive_burnin(
             x_init.detach(), model, budget=500, steps_obj="alpha_max", lr=args.burnin_lr
@@ -172,6 +176,6 @@ if __name__ == "__main__":
     parser.add_argument("--burnin_error_margin_hops", type=float, default=5)
     parser.add_argument("--burnin_alphamin_decay", type=float, default=0.9)
     parser.add_argument("--burnin_bal_resolution", type=int, default=6)
-
+    parser.add_argument("--use_big", action="store_true")
     args = parser.parse_args()
     main(args)

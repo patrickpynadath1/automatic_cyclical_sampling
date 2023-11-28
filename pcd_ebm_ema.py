@@ -62,6 +62,7 @@ def get_sampler(args):
                 step_size=args.step_size,
                 bal=args.initial_balancing_constant,
                 mh=True,
+                use_big=args.use_big,
             )
 
         elif args.sampler == "dula":
@@ -75,6 +76,7 @@ def get_sampler(args):
                 step_size=args.step_size,
                 bal=args.initial_balancing_constant,
                 mh=False,
+                use_big=args.use_big,
             )
 
         elif args.sampler == "cyc_dmala":
@@ -91,6 +93,12 @@ def get_sampler(args):
                 n_steps=1,
                 initial_balancing_constant=args.initial_balancing_constant,
                 device=args.device,
+                sbc=args.use_manual_EE,
+                big_step=args.big_step,
+                small_step=args.small_step,
+                big_bal=args.big_bal,
+                small_bal=args.small_bal,
+                iter_per_cycle=args.steps_per_cycle,
             )
 
         elif args.sampler == "cyc_dula":
@@ -107,6 +115,12 @@ def get_sampler(args):
                 mh=False,
                 initial_balancing_constant=args.initial_balancing_constant,
                 device=args.device,
+                sbc=args.use_manual_EE,
+                big_step=args.big_step,
+                small_step=args.small_step,
+                big_bal=args.big_bal,
+                small_bal=args.small_bal,
+                iter_per_cycle=args.steps_per_cycle,
             )
 
         else:
@@ -238,11 +252,15 @@ def main(args):
     sampler = get_sampler(args)
     model_name = sampler.get_name()
     cur_dir = f"{args.save_dir}/{model_name}"
-    os.makedirs(cur_dir)
+    os.makedirs(cur_dir, exist_ok=True)
     my_print(device)
     my_print(model)
     my_print(buffer.size())
     my_print(sampler)
+    if "cyc" in args.sampler:
+        my_print(sampler.step_sizes)
+        my_print(sampler.balancing_constants)
+        my_print(sampler.get_name())
     print(sampler.step_size)
     itr = 0
     best_val_ll = -np.inf
@@ -510,6 +528,8 @@ if __name__ == "__main__":
     parser.add_argument("--steps_per_cycle", type=int, default=10)
     parser.add_argument("--use_manual_EE", action="store_true")
     parser.add_argument("--big_step", type=float, default=1.0)
+    parser.add_argument("--big_bal", type=float, default=0.95)
+    parser.add_argument("--small_bal", type=float, default=0.5)
     parser.add_argument("--small_step", type=float, default=0.1)
     parser.add_argument("--big_step_sampling_steps", type=int, default=5)
     parser.add_argument("--cuda_id", type=int, default=0)
@@ -519,7 +539,7 @@ if __name__ == "__main__":
         "cuda:" + str(args.cuda_id) if torch.cuda.is_available() else "cpu"
     )
     args.device = device
-    if args.use_outer_loop:
+    if args.use_manual_EE:
         args.n_steps = args.steps_per_cycle
         args.outer_cycles = args.num_cycles
         args.num_cycles = 1
