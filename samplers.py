@@ -265,12 +265,11 @@ class CyclicalLangevinSampler(nn.Module):
                 self.iter_per_cycle - 1
             )
 
-        # need two arrays: one for explore step sizes, another for exploit step sizes
+        else:
+            self.sbc = False
         self.min_lr = min_lr
         if self.min_lr:
             self.min_lr_cutoff()
-        else:
-            self.sbc = False
 
     def get_name(self):
         if self.mh:
@@ -294,13 +293,13 @@ class CyclicalLangevinSampler(nn.Module):
                 base
                 + f"_cycle_length_{self.iter_per_cycle}_big_s_{self.big_step}_b_{self.big_bal}_small_s_{self.small_step}_b_{self.small_bal}"
             )
-        if min_lr:
+        if self.min_lr:
             name += "_min_lr"
         return name
 
     def min_lr_cutoff(self):
-        for i, step in self.stepsizes:
-            if step <= 0.1:
+        for i in range(len(self.step_sizes)):
+            if self.step_sizes[i] <= 0.1:
                 self.step_sizes[i] = 0.1
                 self.balancing_constants[i] = 0.5
 

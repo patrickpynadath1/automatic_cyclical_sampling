@@ -99,6 +99,7 @@ def get_sampler(args):
                 big_bal=args.big_bal,
                 small_bal=args.small_bal,
                 iter_per_cycle=args.steps_per_cycle,
+                min_lr=args.min_lr,
             )
 
         elif args.sampler == "cyc_dula":
@@ -121,6 +122,7 @@ def get_sampler(args):
                 big_bal=args.big_bal,
                 small_bal=args.small_bal,
                 iter_per_cycle=args.steps_per_cycle,
+                min_lr=args.min_lr,
             )
 
         else:
