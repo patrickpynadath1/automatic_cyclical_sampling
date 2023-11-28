@@ -89,6 +89,9 @@ def main(args):
         )
         with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
             pickle.dump(burnin_res, f)
+    if "cyc" in args.sampler:
+        print(f"steps: {sampler.step_sizes}")
+        print(f"bal: {sampler.balancing_constants}")
     for itr in tqdm.tqdm(range(args.sampling_steps)):
         if "cyc" in args.sampler:
             x_cur = sampler.step(x_init, model, itr)
