@@ -212,6 +212,7 @@ class CyclicalLangevinSampler(nn.Module):
         small_step=None,
         small_bal=None,
         iter_per_cycle=None,
+        min_lr=False,
     ):
         super().__init__()
         self.device = device
@@ -265,6 +266,9 @@ class CyclicalLangevinSampler(nn.Module):
             )
 
         # need two arrays: one for explore step sizes, another for exploit step sizes
+        self.min_lr = min_lr
+        if self.min_lr:
+            self.min_lr_cutoff()
         else:
             self.sbc = False
 
@@ -290,7 +294,15 @@ class CyclicalLangevinSampler(nn.Module):
                 base
                 + f"_cycle_length_{self.iter_per_cycle}_big_s_{self.big_step}_b_{self.big_bal}_small_s_{self.small_step}_b_{self.small_bal}"
             )
+        if min_lr:
+            name += "_min_lr"
         return name
+
+    def min_lr_cutoff(self):
+        for i, step in self.stepsizes:
+            if step <= 0.1:
+                self.step_sizes[i] = 0.1
+                self.balancing_constants[i] = 0.5
 
     def calc_stepsizes(self, mean_step):
         res = []
@@ -488,6 +500,10 @@ class CyclicalLangevinSampler(nn.Module):
         total_res["bal-adapt-hist"] = hist_metrics_bal
         self.step_sizes = opt_steps
         self.balancing_constants = opt_bal
+        if self.min_lr:
+            self.min_lr_cutoff()
+        print(f"steps: {self.step_sizes}")
+        print(f"bal: {self.balancing_constants}")
         return x_cur, total_res
 
     # this is the older version of the adaptive function -- keeping for posterity
