@@ -35,6 +35,12 @@ def main(args):
     my_print("Loading data")
     train_loader, _, _, args = vamp_utils.load_dataset(args)
 
+    def preprocess(data):
+        if args.dynamic_binarization:
+            return torch.bernoulli(data)
+        else:
+            return data
+
     my_print("Making Model")
     if args.model.startswith("mlp-"):
         nint = int(args.model.split("-")[1])
@@ -79,6 +85,15 @@ def main(args):
 
     # TODO: add in measuring of energies for different digits from rbm sample
 
+    if args.get_base_energies:
+        digit_energies = []
+        digit_values = []
+        for x, y in train_loader:
+            x = preprocess(x.to(device).requires_grad_())
+            d = model(x)
+            digit_energies += list(d.detach().cpu().numpy())
+            digit_values += list(y.cpu().numpy())
+        digit_energy_res = {"energies": digit_energies, "values": digit_values}
     # metrics to keep track of:
     energies = []
     hops = []
@@ -98,6 +113,9 @@ def main(args):
         else:
             x_cur = sampler.step(x_init, model)
         # calculate the hops
+        cur_sample_var = torch.var(x_cur, dim=1)
+        mean_var = torch.mean(cur_sample_var).detach().cpu().item()
+        sample_var.append(mean_var)
 
         h = (x_cur != x_init).float().view(x_init.size(0), -1).sum(-1).mean().item()
         hops.append(h)
@@ -119,6 +137,11 @@ def main(args):
     if "dmala" in args.sampler:
         with open(f"{cur_dir}/a_s.pickle", "wb") as f:
             pickle.dump(sampler.a_s, f)
+    if args.get_base_energies:
+        with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
+            pickle.dump(digit_energy_res, f)
+    with open(f"{cur_dir}/sample_var.pickle", "wb") as f:
+        pickle.dump(sample_var, f)
     pass
 
 
@@ -188,6 +211,7 @@ if __name__ == "__main__":
     parser.add_argument("--small_bal", type=float, default=0.5)
     parser.add_argument("--small_step", type=float, default=0.1)
     parser.add_argument("--big_step_sampling_steps", type=int, default=5)
+    parser.add_argument("--get_base_energies", action="store_true")
     args = parser.parse_args()
 
     main(args)
