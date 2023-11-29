@@ -7,6 +7,7 @@ import block_samplers
 import torch.nn as nn
 import os
 import torchvision
+from utils import get_dlp_samplers
 import vamp_utils
 import ais
 import copy
@@ -51,82 +52,9 @@ def get_sampler(args):
             sampler = samplers.MultiDiffSampler(
                 data_dim, 1, approx=True, temp=2.0, n_samples=n_hops
             )
-        elif args.sampler == "dmala":
-            sampler = samplers.LangevinSampler(
-                data_dim,
-                1,
-                fixed_proposal=False,
-                approx=True,
-                multi_hop=False,
-                temp=1.0,
-                step_size=args.step_size,
-                bal=args.initial_balancing_constant,
-                mh=True,
-                use_big=args.use_big,
-            )
-
-        elif args.sampler == "dula":
-            sampler = samplers.LangevinSampler(
-                data_dim,
-                1,
-                fixed_proposal=False,
-                approx=True,
-                multi_hop=False,
-                temp=1.0,
-                step_size=args.step_size,
-                bal=args.initial_balancing_constant,
-                mh=False,
-                use_big=args.use_big,
-            )
-
-        elif args.sampler == "cyc_dmala":
-            sampler = samplers.CyclicalLangevinSampler(
-                data_dim,
-                num_cycles=args.num_cycles,
-                num_iters=args.sampling_steps,
-                fixed_proposal=False,
-                approx=True,
-                multi_hop=False,
-                temp=2.0,
-                mean_stepsize=args.step_size,
-                mh=True,
-                n_steps=1,
-                initial_balancing_constant=args.initial_balancing_constant,
-                device=args.device,
-                sbc=args.use_manual_EE,
-                big_step=args.big_step,
-                small_step=args.small_step,
-                big_bal=args.big_bal,
-                small_bal=args.small_bal,
-                iter_per_cycle=args.steps_per_cycle,
-                min_lr=args.min_lr,
-            )
-
-        elif args.sampler == "cyc_dula":
-            sampler = samplers.CyclicalLangevinSampler(
-                data_dim,
-                num_cycles=args.num_cycles,
-                num_iters=args.sampling_steps,
-                fixed_proposal=False,
-                approx=True,
-                multi_hop=False,
-                temp=2.0,
-                n_steps=1,
-                mean_stepsize=args.step_size,
-                mh=False,
-                initial_balancing_constant=args.initial_balancing_constant,
-                device=args.device,
-                sbc=args.use_manual_EE,
-                big_step=args.big_step,
-                small_step=args.small_step,
-                big_bal=args.big_bal,
-                small_bal=args.small_bal,
-                iter_per_cycle=args.steps_per_cycle,
-                min_lr=args.min_lr,
-            )
 
         else:
-            raise ValueError("Invalid sampler...")
+            sampler = get_dlp_samplers(args.sampler, data_dim, device, args)
     else:
         if args.sampler == "gibbs":
             sampler = samplers.PerDimMetropolisSampler(
