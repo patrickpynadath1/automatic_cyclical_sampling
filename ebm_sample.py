@@ -155,7 +155,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="figs/ebm/best_ckpt_dynamic_mnist_dmala_stepsize_0.2_0.5_0.2.pt",
+        default="figs/ebm_ss40/best_ckpt_dynamic_mnist_dmala_stepsize_0.2_0.5_0.2.pt",
     )
     parser.add_argument("--ebm_model", type=str, default="resnet-64")
     # model def

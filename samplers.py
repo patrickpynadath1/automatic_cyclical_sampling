@@ -298,9 +298,13 @@ class CyclicalLangevinSampler(nn.Module):
         return name
 
     def min_lr_cutoff(self):
+        if self.mh:
+            min_step = 0.2
+        else:
+            min_step = 0.1
         for i in range(len(self.step_sizes)):
-            if self.step_sizes[i] <= 0.1:
-                self.step_sizes[i] = 0.1
+            if self.step_sizes[i] <= min_step:
+                self.step_sizes[i] = min_step
                 self.balancing_constants[i] = 0.5
 
     def calc_stepsizes(self, mean_step):
