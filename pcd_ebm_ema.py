@@ -54,7 +54,7 @@ def get_sampler(args):
             )
 
         else:
-            sampler = get_dlp_samplers(args.sampler, data_dim, device, args)
+            sampler = get_dlp_samplers(args.sampler, data_dim, args.device, args)
     else:
         if args.sampler == "gibbs":
             sampler = samplers.PerDimMetropolisSampler(

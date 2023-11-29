@@ -100,7 +100,13 @@ def main(args):
     sample_var = []
     if args.burnin_adaptive:
         x_init, burnin_res = sampler.run_adaptive_burnin(
-            x_init.detach(), model, budget=500, steps_obj="alpha_max", lr=args.burnin_lr
+            x_init.detach(),
+            model,
+            budget=args.burnin_budget,
+            steps_obj="alpha_max",
+            lr=args.burnin_lr,
+            test_steps=args.burnin_test_steps,
+            a_s_cut=0.5,
         )
         with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
             pickle.dump(burnin_res, f)
@@ -148,14 +154,13 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--save_dir", type=str, default="./figs/ebm_sample")
-    parser.add_argument("--n_steps", type=int, default=50000)
     parser.add_argument("--n_samples", type=int, default=2)
     parser.add_argument("--n_test_samples", type=int, default=2)
     parser.add_argument("--seed_file", type=str, default="seed.txt")
     parser.add_argument(
         "--ckpt_path",
         type=str,
-        default="figs/ebm_ss40/best_ckpt_dynamic_mnist_dmala_stepsize_0.2_0.5_0.2.pt",
+        default="figs/ebm/best_ckpt_dynamic_mnist_dmala_stepsize_0.2_0.5_0.2.pt",
     )
     parser.add_argument("--ebm_model", type=str, default="resnet-64")
     # model def
@@ -213,5 +218,5 @@ if __name__ == "__main__":
     parser.add_argument("--big_step_sampling_steps", type=int, default=5)
     parser.add_argument("--get_base_energies", action="store_true")
     args = parser.parse_args()
-
+    args.n_steps = args.sampling_steps
     main(args)
