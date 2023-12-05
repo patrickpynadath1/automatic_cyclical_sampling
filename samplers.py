@@ -148,7 +148,7 @@ class LangevinSampler(nn.Module):
 
         EPS = 1e-10
         for i in range(self.n_steps):
-            forward_delta = self.diff_fn(x_cur, model)
+            forward_delta = self.iff_fn(x_cur, model)
             if self.use_big:
                 term2 = 0
             else:
