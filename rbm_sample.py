@@ -14,7 +14,7 @@ import block_samplers
 import time
 from result_storing_utils import *
 import pickle
-import neptune
+from config_cmdline import config_sampler_args, config_adaptive_args, config_SbC_args
 
 
 def makedirs(dirname):
@@ -131,6 +131,8 @@ def main(args):
     sample_var = {}
 
     x0 = model.init_dist.sample((args.n_test_samples,)).to(device)
+    if args.zero_init:
+        x0 = torch.zeros_like(x0).to(device)
     temps = args.samplers
     for temp in temps:
         if temp == "dim-gibbs":
@@ -164,7 +166,7 @@ def main(args):
             sampler = utils.get_dlp_samplers(temp, args.n_visible, device, args)
 
         model_name = sampler.get_name()
-        cur_dir = f"{args.save_dir}/rbm_iter_{args.rbm_train_iter}/{model_name}"
+        cur_dir = f"{args.save_dir}/zeroinit_{args.zero_init}/rbm_iter_{args.rbm_train_iter}/{model_name}"
         os.makedirs(cur_dir, exist_ok=True)
         x = x0.clone().detach()
         sample_var[temp] = []
@@ -184,6 +186,7 @@ def main(args):
                 test_steps=args.burnin_test_steps,
                 steps_obj="alpha_max",
                 lr=args.burnin_lr,
+                a_s_cut=args.burnin_a_s_cut,
             )
             with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
                 pickle.dump(burnin_res, f)
@@ -305,33 +308,18 @@ if __name__ == "__main__":
     parser.add_argument(
         "--ess_statistic", type=str, default="dims", choices=["hamming", "dims"]
     )
+    parser.add_argument("--zero_init", action="store_true")
+    parser.add_argument("--samplers", type=str, nargs="*", default=["cyc_dula"])
+    # sampler params
+    parser = config_sampler_args(parser)
 
-    parser.add_argument("--use_manual_EE", action="store_true")
-    parser.add_argument("--num_cycles", type=int, default=250)
-    parser.add_argument("--step_size", type=float, default=1.5)
-    parser.add_argument("--samplers", nargs="*", type=str, default=["cyc_dula"])
-    parser.add_argument("--initial_balancing_constant", type=float, default=1)
-    parser.add_argument("--cuda_id", type=int, default=0)
-    parser.add_argument("--burnin_frequency", type=int, default=100)
-    parser.add_argument("--burnin_budget", type=int, default=1000)
-    parser.add_argument("--burnin_adaptive", action="store_true")
-    parser.add_argument("--burnin_test_steps", type=int, default=10)
-    parser.add_argument("--burnin_step_obj", type=str, default="alpha_max")
-    parser.add_argument("--burnin_init_bal", type=float, default=0.95)
-    parser.add_argument("--burnin_a_s_cut", type=float, default=0.5)
-    parser.add_argument("--burnin_lr", type=float, default=0.5)
-    parser.add_argument("--burnin_error_margin_a_s", type=float, default=0.01)
-    parser.add_argument("--burnin_error_margin_hops", type=float, default=5)
-    parser.add_argument("--burnin_alphamin_decay", type=float, default=0.9)
-    parser.add_argument("--burnin_bal_resolution", type=int, default=6)
-    parser.add_argument("--use_big", action="store_true")
+    # adaptive hyper params
+    parser = config_adaptive_args(parser)
 
     # sbc hyper params
-    parser.add_argument("--big_step", type=float, default=0.2)
-    parser.add_argument("--small_step", type=float, default=0.2)
-    parser.add_argument("--small_bal", type=float, default=0.5)
-    parser.add_argument("--big_bal", type=float, default=0.5)
+    parser = config_SbC_args(parser)
     parser.add_argument("--get_base_energies", action="store_true")
+    parser.add_argument("--cuda_id", type=int, default=0)
     args = parser.parse_args()
 
     main(args)

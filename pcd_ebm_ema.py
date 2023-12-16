@@ -2,7 +2,13 @@ import argparse
 import mlp
 import torch
 import numpy as np
-import samplers
+from samplers import (
+    PerDimGibbsSampler,
+    MultiDiffSampler,
+    DiffSampler,
+    PerDimMetropolisSampler,
+    DiffSamplerMultiDim,
+)
 import block_samplers
 import torch.nn as nn
 import os
@@ -27,9 +33,9 @@ def get_sampler(args):
     data_dim = np.prod(args.input_size)
     if args.input_type == "binary":
         if args.sampler == "gibbs":
-            sampler = samplers.PerDimGibbsSampler(data_dim, rand=False)
+            sampler = PerDimGibbsSampler(data_dim, rand=False)
         elif args.sampler == "rand_gibbs":
-            sampler = samplers.PerDimGibbsSampler(data_dim, rand=True)
+            sampler = PerDimGibbsSampler(data_dim, rand=True)
         elif args.sampler.startswith("bg-"):
             block_size = int(args.sampler.split("-")[1])
             sampler = block_samplers.BlockGibbsSampler(data_dim, block_size)
@@ -39,7 +45,7 @@ def get_sampler(args):
                 data_dim, block_size, hamming_dist
             )
         elif args.sampler == "gwg":
-            sampler = samplers.DiffSampler(
+            sampler = DiffSampler(
                 data_dim,
                 1,
                 fixed_proposal=False,
@@ -49,7 +55,7 @@ def get_sampler(args):
             )
         elif args.sampler.startswith("gwg-"):
             n_hops = int(args.sampler.split("-")[1])
-            sampler = samplers.MultiDiffSampler(
+            sampler = MultiDiffSampler(
                 data_dim, 1, approx=True, temp=2.0, n_samples=n_hops
             )
 
@@ -57,15 +63,11 @@ def get_sampler(args):
             sampler = get_dlp_samplers(args.sampler, data_dim, args.device, args)
     else:
         if args.sampler == "gibbs":
-            sampler = samplers.PerDimMetropolisSampler(
-                data_dim, int(args.n_out), rand=False
-            )
+            sampler = PerDimMetropolisSampler(data_dim, int(args.n_out), rand=False)
         elif args.sampler == "rand_gibbs":
-            sampler = samplers.PerDimMetropolisSampler(
-                data_dim, int(args.n_out), rand=True
-            )
+            sampler = PerDimMetropolisSampler(data_dim, int(args.n_out), rand=True)
         elif args.sampler == "gwg":
-            sampler = samplers.DiffSamplerMultiDim(data_dim, 1, approx=True, temp=2.0)
+            sampler = DiffSamplerMultiDim(data_dim, 1, approx=True, temp=2.0)
         else:
             raise ValueError("invalid sampler")
     return sampler
@@ -463,6 +465,10 @@ if __name__ == "__main__":
     parser.add_argument("--small_step", type=float, default=0.1)
     parser.add_argument("--big_step_sampling_steps", type=int, default=5)
     parser.add_argument("--cuda_id", type=int, default=0)
+    parser.add_argument("--burnin_budget", type=int, default=0)
+    parser.add_argument("--burnin_adaptive", action="store_true")
+    parser.add_argument("--burnin_lr", type=float, default=0.5)
+    parser.add_argument("--burnin_step_obj", type=str, default="alpha_max")
     args = parser.parse_args()
 
     device = torch.device(

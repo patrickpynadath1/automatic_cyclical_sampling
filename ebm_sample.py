@@ -10,6 +10,8 @@ import mlp
 from pcd_ebm_ema import get_sampler, EBM
 import torchvision
 from rbm_sample import get_ess
+from config_cmdline import config_adaptive_args, config_sampler_args, config_SbC_args
+import pickle
 
 
 def sqrt(x):
@@ -41,6 +43,13 @@ def main(args):
         else:
             return data
 
+    # function for examining and collecting interpolated energies given two samples
+    def interpolate_samples(x1, x2, interp_dist, model):
+        x_interp = x1 * (interp_dist) + x2 * (1 - interp_dist)
+        x_interp = preprocess(x_interp.to(device).requires_grad_())
+        energy = model(x_interp)
+        return list(energy.detach().cpu().numpy())
+
     my_print("Making Model")
     if args.model.startswith("mlp-"):
         nint = int(args.model.split("-")[1])
@@ -59,7 +68,7 @@ def main(args):
     if args.burnin_adaptive:
         sampler_name += "_adapt_burnin"
         sampler_name += f"_lr_{args.burnin_lr}"
-    cur_dir = f"{args.save_dir}/{sampler_name}"
+    cur_dir = f"{args.save_dir}/zeroinit_{args.zero_init}/{sampler_name}"
     os.makedirs(cur_dir, exist_ok=True)
 
     # copying the same initialization for the buffer as in pcd_ebm_ema
@@ -80,7 +89,8 @@ def main(args):
     model.load_state_dict(d["ema_model"])
 
     x_init = init_dist.sample((args.samples_to_generate,)).to(device)
-
+    if args.zero_init:
+        x_init = torch.zeros_like(x_init).to(device)
     model = model.to(device)
 
     # TODO: add in measuring of energies for different digits from rbm sample
@@ -106,18 +116,30 @@ def main(args):
             steps_obj="alpha_max",
             lr=args.burnin_lr,
             test_steps=args.burnin_test_steps,
-            a_s_cut=0.5,
+            a_s_cut=args.burnin_a_s_cut,
         )
         with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
             pickle.dump(burnin_res, f)
     if "cyc" in args.sampler:
         print(f"steps: {sampler.step_sizes}")
         print(f"bal: {sampler.balancing_constants}")
+    itr_per_cycle = args.sampling_steps // args.num_cycles
+    interpolation_distances = list(np.linspace(0, 1, 10))
+    interp_energies = [[] for _ in range(len(interpolation_distances))]
+    to_interp = []
     for itr in tqdm.tqdm(range(args.sampling_steps)):
         if "cyc" in args.sampler:
             x_cur = sampler.step(x_init, model, itr)
         else:
             x_cur = sampler.step(x_init, model)
+        if itr % itr_per_cycle == 0:
+            to_interp.append(x_cur.clone().detach())
+        if len(to_interp) == 2:
+            for i, d in enumerate(interpolation_distances):
+                interp_energies[i] += interpolate_samples(
+                    to_interp[0], to_interp[1], d, model
+                )
+            to_interp = []
         # calculate the hops
         cur_sample_var = torch.var(x_cur, dim=1)
         mean_var = torch.mean(cur_sample_var).detach().cpu().item()
@@ -143,6 +165,8 @@ def main(args):
     if "dmala" in args.sampler:
         with open(f"{cur_dir}/a_s.pickle", "wb") as f:
             pickle.dump(sampler.a_s, f)
+    with open(f"{cur_dir}/interp_energies.pickle", "wb") as f:
+        pickle.dump(interp_energies, f)
     if args.get_base_energies:
         with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
             pickle.dump(digit_energy_res, f)
@@ -153,7 +177,7 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./figs/ebm_sample")
+    parser.add_argument("--save_dir", type=str, default="./figs/ebm_sample_zero")
     parser.add_argument("--n_samples", type=int, default=2)
     parser.add_argument("--n_test_samples", type=int, default=2)
     parser.add_argument("--seed_file", type=str, default="seed.txt")
@@ -175,7 +199,7 @@ if __name__ == "__main__":
     parser.add_argument("--img_size", type=int, default=28)
     parser.add_argument("--batch_size", type=int, default=100)
     parser.add_argument("--samples_to_generate", type=int, default=128)
-    parser.add_argument("--sampling_steps", type=int, default=500)
+    parser.add_argument("--sampling_steps", type=int, default=5000)
     parser.add_argument("--dataset_name", type=str, default="dynamic_mnist")
     # for ess
     parser.add_argument("--model", type=str, default="resnet-64")
@@ -186,36 +210,14 @@ if __name__ == "__main__":
     )
     parser.add_argument("--no_ess", action="store_true")
     parser.add_argument("--test_batch_size", type=int, default=100)
-    parser.add_argument("--num_cycles", type=int, default=250)
-    parser.add_argument("--step_size", type=float, default=2.0)
     parser.add_argument("--base_dist", action="store_true")
     parser.add_argument("--sampler", type=str, default="cyc_dmala")
-    parser.add_argument("--initial_balancing_constant", type=float, default=1.0)
     parser.add_argument("--cuda_id", type=int, default=0)
+    parser.add_argument("--zero_init", action="store_true")
     # adaptive arguments here
-    parser.add_argument("--adaptive_cycles", type=int, default=150)
-    parser.add_argument("--adapt_rate", type=float, default=0.025)
-    parser.add_argument("--burnin_frequency", type=int, default=1000)
-    parser.add_argument("--burnin_budget", type=int, default=1000)
-    parser.add_argument("--burnin_adaptive", action="store_true")
-    parser.add_argument("--burnin_test_steps", type=int, default=10)
-    parser.add_argument("--burnin_step_obj", type=str, default="alpha_max")
-    parser.add_argument("--burnin_init_bal", type=float, default=0.95)
-    parser.add_argument("--burnin_a_s_cut", type=float, default=0.5)
-    parser.add_argument("--burnin_lr", type=float, default=0.5)
-    parser.add_argument("--burnin_error_margin_a_s", type=float, default=0.01)
-    parser.add_argument("--burnin_error_margin_hops", type=float, default=5)
-    parser.add_argument("--burnin_alphamin_decay", type=float, default=0.9)
-    parser.add_argument("--burnin_bal_resolution", type=int, default=6)
-    parser.add_argument("--use_big", action="store_true")
-    parser.add_argument("--min_lr", action="store_true")
-    parser.add_argument("--steps_per_cycle", type=int, default=10)
-    parser.add_argument("--use_manual_EE", action="store_true")
-    parser.add_argument("--big_step", type=float, default=1.0)
-    parser.add_argument("--big_bal", type=float, default=0.95)
-    parser.add_argument("--small_bal", type=float, default=0.5)
-    parser.add_argument("--small_step", type=float, default=0.1)
-    parser.add_argument("--big_step_sampling_steps", type=int, default=5)
+    parser = config_adaptive_args(parser)
+    parser = config_sampler_args(parser)
+    parser = config_SbC_args(parser)
     parser.add_argument("--get_base_energies", action="store_true")
     args = parser.parse_args()
     args.n_steps = args.sampling_steps
