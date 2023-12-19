@@ -55,6 +55,8 @@ def get_dlp_samplers(temp, dim, device, args):
             big_bal=args.big_bal,
             small_step=args.small_step,
             small_bal=args.small_bal,
+            a_s_cut=args.a_s_cut,
+            min_lr=args.min_lr,
         )
     elif temp in ["dmala", "dula"]:
         sampler = samplers.LangevinSampler(

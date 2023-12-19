@@ -109,14 +109,28 @@ def main(args):
     hops = []
     sample_var = []
     if args.burnin_adaptive:
-        x_init, burnin_res = sampler.run_adaptive_burnin(
+        # x_init, burnin_res = sampler.run_adaptive_burnin(
+        #     x_init.detach(),
+        #     model,
+        #     budget=args.burnin_budget,
+        #     steps_obj="alpha_max",
+        #     lr=args.burnin_lr,
+        #     test_steps=args.burnin_test_steps,
+        #     a_s_cut=args.burnin_a_s_cut,
+        # )
+
+        x_init, burnin_res = sampler.adapt_alg_greedy(
             x_init.detach(),
             model,
             budget=args.burnin_budget,
-            steps_obj="alpha_max",
-            lr=args.burnin_lr,
             test_steps=args.burnin_test_steps,
-            a_s_cut=args.burnin_a_s_cut,
+            init_big_step=30,  # TODO: make not hard coded
+            init_small_step=0.01,
+            init_big_bal=0.95,
+            init_small_bal=0.5,
+            lr=0.9,
+            small_a_s_cut=args.a_s_cut,
+            big_a_s_cut=0.5,
         )
         with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
             pickle.dump(burnin_res, f)
@@ -131,6 +145,11 @@ def main(args):
         if "cyc" in args.sampler:
             x_cur = sampler.step(x_init, model, itr)
         else:
+            if not args.initial_mh and itr < 100:
+                sampler.mh = False
+            else:
+                if args.sampler == "dmala":
+                    sampler.mh = True
             x_cur = sampler.step(x_init, model)
         if itr % itr_per_cycle == 0:
             to_interp.append(x_cur.clone().detach())
@@ -213,6 +232,9 @@ if __name__ == "__main__":
     parser.add_argument("--base_dist", action="store_true")
     parser.add_argument("--sampler", type=str, default="cyc_dmala")
     parser.add_argument("--cuda_id", type=int, default=0)
+    # use mh in the begining of the sampling process during burning (first 500)
+    # may have an impact on burn in and acceptance rate
+    parser.add_argument("--initial_mh", action="store_true")
     parser.add_argument("--zero_init", action="store_true")
     # adaptive arguments here
     parser = config_adaptive_args(parser)

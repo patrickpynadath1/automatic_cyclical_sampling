@@ -179,14 +179,27 @@ def main(args):
         print_every_i = 0
 
         if args.burnin_adaptive:
-            x, burnin_res = sampler.run_adaptive_burnin(
+            # x, burnin_res = sampler.run_adaptive_burnin(
+            #     x.detach(),
+            #     model,
+            #     budget=args.burnin_budget,
+            #     test_steps=args.burnin_test_steps,
+            #     steps_obj="alpha_max",
+            #     lr=args.burnin_lr,
+            #     a_s_cut=args.burnin_a_s_cut,
+            # )
+            x, burnin_res = sampler.adapt_alg_greedy(
                 x.detach(),
                 model,
                 budget=args.burnin_budget,
                 test_steps=args.burnin_test_steps,
-                steps_obj="alpha_max",
-                lr=args.burnin_lr,
-                a_s_cut=args.burnin_a_s_cut,
+                init_big_step=30,  # TODO: make not hard coded
+                init_small_step=0.01,
+                init_big_bal=0.95,
+                init_small_bal=0.5,
+                big_a_s_cut=0.5,
+                lr=0.9,
+                small_a_s_cut=args.a_s_cut,
             )
             with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
                 pickle.dump(burnin_res, f)
