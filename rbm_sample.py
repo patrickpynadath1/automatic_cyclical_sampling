@@ -1,4 +1,5 @@
 import argparse
+from posixpath import exists
 import rbm
 import torch
 import numpy as np
@@ -14,7 +15,26 @@ import block_samplers
 import time
 from result_storing_utils import *
 import pickle
-from config_cmdline import config_sampler_args, config_adaptive_args, config_SbC_args
+from config_cmdline import (
+    config_sampler_args,
+    config_adaptive_args,
+    config_SbC_args,
+    potential_datasets,
+)
+
+
+def get_dmala_trained_rbm_sd(data, n_hidden):
+    fn = f"figs/rbm_learn/{data}/itr_10000/{n_hidden}/dmala_stepsize_0.2_0.5/rbm_sd.pt"
+    return torch.load(fn)
+
+
+def get_gb_trained_rbm_sd(data, train_iter, rbm_name):
+    fn = (
+        f"figs/rbm_sample_res/{data}/zeroinit_False/rbm_iter_{train_iter}/{rbm_name}.pt"
+    )
+    if os.path.isfile(fn):
+        return torch.load(fn)
+    return None
 
 
 def makedirs(dirname):
@@ -46,15 +66,17 @@ def main(args):
     #     seeds = [seeds[0]]
     # else:
     #     seeds = seeds[:min(len(seeds), args.num_seeds)]
-
+    args.test_batch_size = args.batch_size
+    args.train_batch_size = args.batch_size
+    args.test_batch_size = args.batch_size
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    model = rbm.BernoulliRBM(args.n_visible, args.n_hidden)
-    model.to(device)
-
-    if args.data == "mnist":
+    if args.data in potential_datasets:
         assert args.n_visible == 784
+        args.img_size = 28
+        model = rbm.BernoulliRBM(args.n_visible, args.n_hidden)
+        model.to(device)
         train_loader, test_loader, plot, viz = utils.get_data(args)
 
         init_data = []
@@ -64,35 +86,61 @@ def main(args):
         init_mean = init_data.mean(0).clamp(0.01, 0.99)
 
         model = rbm.BernoulliRBM(args.n_visible, args.n_hidden, data_mean=init_mean)
-        model.to(device)
+        if args.use_dmala_trained_rbm:
+            sd = get_dmala_trained_rbm_sd(args.data, args.n_hidden)
+            model.load_state_dict(sd)
+            model.to(device)
+            args.rbm_train_iter = "pretrain"
+        else:
+            rbm_name = f"rbm_lr_{args.rbm_lr}_n_hidden_{args.n_hidden}"
+            sd = get_gb_trained_rbm_sd(args.data, args.rbm_train_iter, rbm_name)
+            if sd is not None:
+                print("Model found; omitting unnecessary training")
+                model.load_state_dict(sd)
+                model.to(device)
+            else:
+                print("No saved sd found, training rbm with gb")
+                save_dir = f"figs/rbm_sample_res/{args.data}/zeroinit_False/rbm_iter_{args.rbm_train_iter}/"
+                os.makedirs(save_dir, exist_ok=True)
+                model.to(device)
 
-        optimizer = torch.optim.Adam(model.parameters(), lr=args.rbm_lr)
+                optimizer = torch.optim.Adam(model.parameters(), lr=args.rbm_lr)
 
-        # train!
-        itr = 0
-        while itr < args.rbm_train_iter:
-            for x, _ in train_loader:
-                x = x.to(device)
-                xhat = model.gibbs_sample(v=x, n_steps=args.cd)
+                # train!
+                itr = 0
+                with tqdm.tqdm(total=args.rbm_train_iter) as pbar:
+                    while itr < args.rbm_train_iter:
+                        for x, _ in train_loader:
+                            x = x.to(device)
+                            xhat = model.gibbs_sample(v=x, n_steps=args.cd)
 
-                d = model.logp_v_unnorm(x)
-                m = model.logp_v_unnorm(xhat)
+                            d = model.logp_v_unnorm(x)
+                            m = model.logp_v_unnorm(xhat)
 
-                obj = d - m
-                loss = -obj.mean()
+                            obj = d - m
+                            loss = -obj.mean()
 
-                optimizer.zero_grad()
-                loss.backward()
-                optimizer.step()
+                            optimizer.zero_grad()
+                            loss.backward()
+                            optimizer.step()
 
-                if itr % args.print_every == 0:
-                    print(
-                        "{} | log p(data) = {:.4f}, log p(model) = {:.4f}, diff = {:.4f}".format(
-                            itr, d.mean(), m.mean(), (d - m).mean()
-                        )
-                    )
-            itr += 1
+                            desc_str = "{} | log p(data) = {:.4f}, log p(model) = {:.4f}, diff = {:.4f}".format(
+                                itr, d.mean(), m.mean(), (d - m).mean()
+                            )
 
+                            itr += 1
+
+                            pbar.update(1)
+                            if itr % args.print_every == 0:
+                                pbar.set_description(desc_str, refresh=True)
+
+                            # if itr % args.print_every == 0:
+                            #     print(
+                            #         "{} | log p(data) = {:.4f}, log p(model) = {:.4f}, diff = {:.4f}".format(
+                            #             itr, d.mean(), m.mean(), (d - m).mean()
+                            #         )
+                            #     )
+                    torch.save(model.state_dict(), save_dir + f"{rbm_name}.pt")
     else:
         model.W.data = torch.randn_like(model.W.data) * (0.05**0.5)
         model.b_v.data = torch.randn_like(model.b_v.data) * 1.0
@@ -114,11 +162,13 @@ def main(args):
     )
     kmmd = mmd.MMD(mmd.exp_avg_hamming, False)
     gt_samples, gt_samples2 = gt_samples[: args.n_samples], gt_samples[args.n_samples :]
+    cur_dir_pre = f"{args.save_dir}/{args.data}/zeroinit_{args.zero_init}/rbm_iter_{args.rbm_train_iter}"
+    os.makedirs(cur_dir_pre, exist_ok=True)
     if plot is not None:
-        plot("{}/ground_truth.png".format(args.save_dir), gt_samples2)
+        plot("{}/ground_truth.png".format(cur_dir_pre), gt_samples2)
     opt_stat = kmmd.compute_mmd(gt_samples2, gt_samples)
     print("gt <--> gt log-mmd", opt_stat, opt_stat.log10())
-
+    pickle.dump(opt_stat.log10().cpu(), open(cur_dir_pre + "/gt_log_mmds.pt", "wb"))
     new_samples = model.gibbs_sample(n_steps=0, n_samples=args.n_test_samples)
     log_mmds = {}
     log_mmds["gibbs"] = []
@@ -166,7 +216,9 @@ def main(args):
             sampler = utils.get_dlp_samplers(temp, args.n_visible, device, args)
 
         model_name = sampler.get_name()
-        cur_dir = f"{args.save_dir}/zeroinit_{args.zero_init}/rbm_iter_{args.rbm_train_iter}/{model_name}"
+        cur_dir = f"{args.save_dir}/{args.data}/zeroinit_{args.zero_init}/rbm_iter_{args.rbm_train_iter}/{model_name}"
+        if args.pair_optim:
+            cur_dir += "_pair_opt"
         os.makedirs(cur_dir, exist_ok=True)
         x = x0.clone().detach()
         sample_var[temp] = []
@@ -177,6 +229,19 @@ def main(args):
         chain = []
         cur_time = 0.0
         print_every_i = 0
+        if args.use_dula_init:
+            print("using dula initialization")
+            # only used for experiments with bDMALA and making
+            # step size acc curve
+            orig_sz = sampler.step_size
+            dula_init_sz = 30  # magic number, point is just to make all inits the same
+            sampler.step_size = dula_init_sz
+            orig_mh = sampler.mh
+            sampler.mh = False
+            for i in range(100):
+                x = sampler.step(x.detach(), model).detach()
+            sampler.step_size = orig_sz
+            sampler.mh = orig_mh
 
         if args.burnin_adaptive:
             # x, burnin_res = sampler.run_adaptive_burnin(
@@ -200,8 +265,13 @@ def main(args):
                 big_a_s_cut=0.5,
                 lr=0.9,
                 small_a_s_cut=args.a_s_cut,
+                step_schedule="norm",
+                bal_resolution=args.bal_resolution,
+                pair_optim=args.pair_optim,
             )
             with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
+                burnin_res["final_steps"] = sampler.step_sizes.cpu().numpy()
+                burnin_res["final_bal"] = sampler.balancing_constants
                 pickle.dump(burnin_res, f)
 
         for i in tqdm.tqdm(range(args.n_steps), desc=f"{temp}"):
@@ -294,18 +364,26 @@ def main(args):
 
 
 if __name__ == "__main__":
+    potential_datasets = [
+        "mnist",
+        "fashion",
+        "emnist",
+        "caltech",
+        "omniglot",
+        "kmnist",
+        "random",
+    ]
     parser = argparse.ArgumentParser()
     parser.add_argument("--save_dir", type=str, default="./figs/rbm_sample_res")
-    parser.add_argument(
-        "--data", choices=["mnist", "random"], type=str, default="mnist"
-    )
+    parser.add_argument("--data", choices=potential_datasets, type=str, default="mnist")
     parser.add_argument("--n_steps", type=int, default=5000)
     parser.add_argument("--n_samples", type=int, default=500)
     parser.add_argument("--n_test_samples", type=int, default=100)
     parser.add_argument("--gt_steps", type=int, default=10000)
-    parser.add_argument("--seed", type=int, default=1234567)
+    parser.add_argument("--seed", type=int, default=1123131)
+    parser.add_argument("--use_dmala_trained_rbm", action="store_true")
     # rbm def
-    parser.add_argument("--rbm_train_iter", type=int, default=1)
+    parser.add_argument("--rbm_train_iter", type=int, default=10000)
     parser.add_argument("--n_hidden", type=int, default=500)
     parser.add_argument("--n_visible", type=int, default=784)
     parser.add_argument("--print_every", type=int, default=10)
@@ -333,6 +411,7 @@ if __name__ == "__main__":
     parser = config_SbC_args(parser)
     parser.add_argument("--get_base_energies", action="store_true")
     parser.add_argument("--cuda_id", type=int, default=0)
+    parser.add_argument("--use_dula_init", action="store_true")
     args = parser.parse_args()
 
     main(args)

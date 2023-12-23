@@ -10,6 +10,7 @@ import rbm
 import samplers
 from tqdm import tqdm
 import os
+from vamp_utils import load_caltech101silhouettes, load_omniglot
 
 
 def difference_function(x, model):
@@ -165,7 +166,9 @@ def short_run_mcmc(logp_net, x_init, k, sigma, step_size=None):
 
 
 def get_data(args):
-    if args.data == "mnist":
+    potential_datasets = ["mnist", "fashion", "emnist", "caltech", "omniglot", "kmnist"]
+
+    if args.data in potential_datasets:
         transform = tr.Compose(
             [
                 tr.Resize(args.img_size),
@@ -173,18 +176,73 @@ def get_data(args):
                 lambda x: (x > 0.5).float().view(-1),
             ]
         )
-        train_data = torchvision.datasets.MNIST(
-            root="../data", train=True, transform=transform, download=True
-        )
-        test_data = torchvision.datasets.MNIST(
-            root="../data", train=False, transform=transform, download=True
-        )
-        train_loader = DataLoader(
-            train_data, args.batch_size, shuffle=True, drop_last=True
-        )
-        test_loader = DataLoader(
-            test_data, args.batch_size, shuffle=True, drop_last=True
-        )
+
+        if args.data in ["mnist", "fashion", "emnist", "kmnist", "omniglot"]:
+            if args.data == "mnist":
+                train_data = torchvision.datasets.MNIST(
+                    root="../data", train=True, transform=transform, download=True
+                )
+                test_data = torchvision.datasets.MNIST(
+                    root="../data", train=False, transform=transform, download=True
+                )
+            elif args.data == "kmnist":
+                train_data = torchvision.datasets.KMNIST(
+                    root="../data", train=True, transform=transform, download=True
+                )
+                test_data = torchvision.datasets.KMNIST(
+                    root="../data", train=False, transform=transform, download=True
+                )
+            elif args.data == "emnist":
+                train_data = torchvision.datasets.EMNIST(
+                    root="../data",
+                    train=True,
+                    split="mnist",
+                    transform=transform,
+                    download=True,
+                )
+                test_data = torchvision.datasets.EMNIST(
+                    root="../data",
+                    train=False,
+                    split="mnist",
+                    transform=transform,
+                    download=True,
+                )
+            elif args.data == "fashion":
+                train_data = torchvision.datasets.FashionMNIST(
+                    root="../data", train=True, transform=transform, download=True
+                )
+                test_data = torchvision.datasets.FashionMNIST(
+                    root="../data", train=False, transform=transform, download=True
+                )
+
+            elif args.data == "omniglot":
+                transform = tr.Compose(
+                    [
+                        tr.Resize(args.img_size),
+                        tr.RandomInvert(p=1),
+                        tr.ToTensor(),
+                        lambda x: (x > 0.5).float().view(-1),
+                    ]
+                )
+                train_data = torchvision.datasets.Omniglot(
+                    root="../data", transform=transform, download=True
+                )
+                test_data = train_data
+            train_loader = DataLoader(
+                train_data, args.batch_size, shuffle=True, drop_last=True
+            )
+            test_loader = DataLoader(
+                test_data, args.batch_size, shuffle=True, drop_last=True
+            )
+        else:
+            if args.data == "caltech":
+                (
+                    train_loader,
+                    _,
+                    test_loader,
+                    args,
+                ) = load_caltech101silhouettes(args)
+
         sqrt = lambda x: int(torch.sqrt(torch.Tensor([x])))
         plot = lambda p, x: torchvision.utils.save_image(
             x.view(x.size(0), 1, args.img_size, args.img_size),

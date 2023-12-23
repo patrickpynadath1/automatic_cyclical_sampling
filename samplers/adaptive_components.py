@@ -40,6 +40,61 @@ def run_hyperparameters(
     return a_s, hops, x_potential
 
 
+def estimate_opt_pair_greedy(
+    model,
+    bdmala,
+    x_init,
+    range_max,
+    range_min,
+    budget=250,
+    zoom_resolution=5,
+    test_steps=10,
+    init_bal=0.95,
+    a_s_cut=0.5,
+):
+    itr = 0
+
+    def step_update(sampler, alpha):
+        sampler.step_size = alpha
+
+    hist_a_s = []
+    hist_alpha_max = []
+    hist_hops = []
+    x_cur = x_init
+    abs_max = range_max
+    abs_min = range_min
+    bal_increment = (0.5 / (budget / (zoom_resolution))) / 2
+    while itr < budget:
+        steps_to_test = np.linspace(range_min, range_max, zoom_resolution)
+        bdmala.bal = init_bal
+        a_s_l, hops_l, x_potential_l = run_hyperparameters(
+            model, bdmala, x_cur, test_steps, step_update, steps_to_test
+        )
+        eval_a_s_l = [np.abs(a - a_s_cut) for a in a_s_l]
+        cur_step, a_s, hops, x_cur = update_hyperparam_metrics(
+            np.argmin(eval_a_s_l), steps_to_test, a_s_l, hops_l, x_potential_l
+        )
+        itr += len(steps_to_test) * test_steps
+        hist_a_s.append(a_s)
+        hist_alpha_max.append(cur_step)
+        hist_hops.append(hops)
+
+        # updating range min and range max
+        # case where we aren't getting close to target a_s with cur_bal
+
+        if np.abs(a_s - a_s_cut) >= 0.1:
+            init_bal = init_bal - bal_increment
+            range_min = abs_min
+            range_max = cur_step
+        else:
+            step_interval = np.abs(steps_to_test[0] - steps_to_test[1])
+            range_min = max(cur_step - step_interval, 0)
+            range_max = min(cur_step + step_interval, abs_max)
+    cur_step = cur_step / 2
+    hist_metrics = {"a_s": hist_a_s, "alpha_max": hist_alpha_max, "hops": hist_hops}
+    return x_cur, cur_step, hist_metrics, itr
+
+
 # new function for finding alpha max based on the fact that it is difficult to tell
 # a priori what the target acceptance rate should be for alpha max
 def estimate_opt_step_greedy(
@@ -64,7 +119,6 @@ def estimate_opt_step_greedy(
     hist_hops = []
 
     x_cur = x_init
-    bdmala.bal = init_bal
     while itr < budget:
         steps_to_test = np.linspace(range_min, range_max, zoom_resolution)
         a_s_l, hops_l, x_potential_l = run_hyperparameters(

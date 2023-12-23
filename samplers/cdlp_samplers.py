@@ -191,6 +191,8 @@ class CyclicalLangevinSampler(nn.Module):
         step_size_pair=None,
         step_schedule="mod",
         x_init_to_use="alpha_max",
+        pair_optim=False,
+        bal_resolution=3,
     ):
         bdmala = LangevinSampler(
             dim=self.dim,
@@ -226,24 +228,46 @@ class CyclicalLangevinSampler(nn.Module):
                 init_bal=init_small_bal,
             )
             possible_x_inits.append(alpha_min_x_init)
-            # estimating alpha max
-            (
-                alpha_max_x_init,
-                alpha_max,
-                alpha_max_metrics,
-                itr,
-            ) = estimate_opt_step_greedy(
-                model=model,
-                bdmala=bdmala,
-                x_init=dula_x_init,
-                range_max=init_big_step,
-                range_min=init_small_step,
-                a_s_cut=big_a_s_cut,
-                budget=budget // 2,
-                zoom_resolution=step_zoom_res,
-                test_steps=test_steps,
-                init_bal=init_big_bal,
-            )
+            if pair_optim:
+                # estimating alpha max
+                (
+                    alpha_max_x_init,
+                    alpha_max,
+                    alpha_max_metrics,
+                    itr,
+                ) = estimate_opt_pair_greedy(
+                    model=model,
+                    bdmala=bdmala,
+                    x_init=dula_x_init,
+                    range_max=init_big_step,
+                    range_min=init_small_step,
+                    a_s_cut=big_a_s_cut,
+                    budget=budget // 2,
+                    zoom_resolution=step_zoom_res,
+                    test_steps=test_steps,
+                    init_bal=init_big_bal,
+                )
+                init_big_bal = bdmala.bal
+                print(init_big_bal)
+            else:
+                # estimating alpha max
+                (
+                    alpha_max_x_init,
+                    alpha_max,
+                    alpha_max_metrics,
+                    itr,
+                ) = estimate_opt_step_greedy(
+                    model=model,
+                    bdmala=bdmala,
+                    x_init=dula_x_init,
+                    range_max=init_big_step,
+                    range_min=init_small_step,
+                    a_s_cut=big_a_s_cut,
+                    budget=budget // 2,
+                    zoom_resolution=step_zoom_res,
+                    test_steps=test_steps,
+                    init_bal=init_big_bal,
+                )
             possible_x_inits.append(alpha_max_x_init)
             total_res["alpha_max_metrics"] = alpha_max_metrics
             total_res["alpha_min_metrics"] = alpha_min_metrics
@@ -259,9 +283,13 @@ class CyclicalLangevinSampler(nn.Module):
         for i in range(len(opt_steps)):
             if opt_steps[i] < alpha_min:
                 break
-
         bal_x_init, opt_bal, bal_metrics = estimate_opt_bal(
-            model=model, bdmala=bdmala, x_init=dula_x_init, opt_steps=opt_steps[:i]
+            model=model,
+            bdmala=bdmala,
+            x_init=dula_x_init,
+            init_bal=init_big_bal,
+            opt_steps=opt_steps[:i],
+            est_resolution=bal_resolution,
         )
         possible_x_inits.append(bal_x_init)
 
@@ -277,15 +305,15 @@ class CyclicalLangevinSampler(nn.Module):
         print("\n")
         print("bal: \n")
         print(self.balancing_constants)
-        if x_init_to_use == "dula":
-            x_init = possible_x_inits[0]
-        elif x_init_to_use == "alpha_min" and step_size_pair is not None:
+        if x_init_to_use == "alpha_min" and step_size_pair is not None:
             x_init = possible_x_inits[1]
         elif x_init_to_use == "alpha_max" and step_size_pair is not None:
             x_init = possible_x_inits[2]
         elif x_init_to_use == "bal":
             x_init = possible_x_inits[3]
-        return bal_x_init, total_res
+        else:
+            x_init = possible_x_inits[0]
+        return x_init, total_res
 
     def adapt_steps(
         self,
