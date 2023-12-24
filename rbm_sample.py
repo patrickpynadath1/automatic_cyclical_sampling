@@ -219,6 +219,7 @@ def main(args):
         cur_dir = f"{args.save_dir}/{args.data}/zeroinit_{args.zero_init}/rbm_iter_{args.rbm_train_iter}/{model_name}"
         if args.pair_optim:
             cur_dir += "_pair_opt"
+        cur_dir += f"_{args.adapt_strat}"
         os.makedirs(cur_dir, exist_ok=True)
         x = x0.clone().detach()
         sample_var[temp] = []
@@ -253,22 +254,40 @@ def main(args):
             #     lr=args.burnin_lr,
             #     a_s_cut=args.burnin_a_s_cut,
             # )
-            x, burnin_res = sampler.adapt_alg_greedy(
-                x.detach(),
-                model,
-                budget=args.burnin_budget,
-                test_steps=args.burnin_test_steps,
-                init_big_step=30,  # TODO: make not hard coded
-                init_small_step=0.01,
-                init_big_bal=0.95,
-                init_small_bal=0.5,
-                big_a_s_cut=0.5,
-                lr=0.9,
-                small_a_s_cut=args.a_s_cut,
-                step_schedule="norm",
-                bal_resolution=args.bal_resolution,
-                pair_optim=args.pair_optim,
-            )
+            if args.adapt_strat == "greedy":
+                x, burnin_res = sampler.adapt_alg_greedy(
+                    x.detach(),
+                    model,
+                    budget=args.burnin_budget,
+                    test_steps=args.burnin_test_steps,
+                    init_big_step=30,  # TODO: make not hard coded
+                    init_small_step=0.01,
+                    init_big_bal=0.95,
+                    init_small_bal=0.5,
+                    big_a_s_cut=0.5,
+                    lr=0.9,
+                    small_a_s_cut=args.a_s_cut,
+                    step_schedule="norm",
+                    bal_resolution=args.bal_resolution,
+                    pair_optim=args.pair_optim,
+                )
+            else:
+                x, burnin_res = sampler.adapt_bayes_gp(
+                    x.detach(),
+                    model,
+                    budget=args.burnin_budget,
+                    test_steps=args.burnin_test_steps,
+                    init_big_step=30,  # TODO: make not hard coded
+                    init_small_step=0.01,
+                    init_big_bal=0.95,
+                    init_small_bal=0.5,
+                    big_a_s_cut=0.5,
+                    lr=0.9,
+                    small_a_s_cut=args.a_s_cut,
+                    step_schedule="norm",
+                    bal_resolution=args.bal_resolution,
+                    pair_optim=args.pair_optim,
+                )
             with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
                 burnin_res["final_steps"] = sampler.step_sizes.cpu().numpy()
                 burnin_res["final_bal"] = sampler.balancing_constants

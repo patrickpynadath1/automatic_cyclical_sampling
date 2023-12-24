@@ -1,5 +1,6 @@
 import torch
 import numpy as np
+import bayes_opt
 
 
 def eval_bdmala(model, bdmala, x_init, test_steps):
@@ -279,3 +280,95 @@ def estimate_opt_bal(
     opt_bal = opt_bal[::-1]
     hist_metrics = {"a_s": hist_a_s, "hops": hist_hops}
     return x_cur, opt_bal, hist_metrics
+
+
+class BayesOptimizer:
+    def __init__(self, model: torch.nn.Module, sampler, test_steps):
+        self.model = model
+        self.bdmala = sampler
+        self.test_steps = test_steps
+
+    def find_alpha_min(
+        self,
+        x_init,
+        target_a_s=0.5,
+        min_bal=0.5,
+        alpha_max=30,
+        alpha_suggest=0.2,
+        budget=250,
+        init_points=5,
+    ):
+        a_s_log = []
+        hops_log = []
+        self.bdmala.bal = min_bal
+        x_pool = [x_init]
+
+        def acceptance_function(alpha):
+            self.bdmala.step_size = alpha
+            x_to_use = x_pool[-1]
+            a_s, hops_mean, x_cur = eval_bdmala(
+                self.model, self.bdmala, x_to_use, self.test_steps
+            )
+            a_s_log.append(a_s)
+            x_pool.append(x_cur)
+            hops_log.append(hops_mean)
+            obj = -np.abs(a_s - target_a_s)
+            return obj
+
+        optimizer = bayes_opt.BayesianOptimization(
+            f=acceptance_function,
+            pbounds={"alpha": (0, 1)},
+            verbose=2,
+            random_state=1,
+        )
+        optimizer.probe(params={"alpha": alpha_suggest}, lazy=True)
+
+        optimizer.maximize(
+            init_points=init_points, n_iter=(budget // self.test_steps - init_points)
+        )
+        return optimizer.max["params"]["alpha"], a_s_log, hops_log, x_pool[-1]
+
+    def find_max_pair(self, x_init, alpha_max, budget=250, init_points=10):
+        a_s_log = []
+        hops_log = []
+        x_pool = [x_init]
+
+        def hops_function(alpha, beta):
+            self.bdmala.step_size = alpha
+            self.bdmala.bal = beta
+            # x_to_use = x_pool[-1]
+            x_to_use = x_init
+            a_s, hops_mean, x_cur = eval_bdmala(
+                self.model, self.bdmala, x_to_use, self.test_steps
+            )
+            x_pool.append(x_cur)
+            a_s_log.append(a_s)
+            hops_log.append(hops_mean)
+            obj = -np.abs(a_s - 0.5)
+            return obj
+
+        optimizer = bayes_opt.BayesianOptimization(
+            f=hops_function,
+            pbounds={"alpha": (0.2, alpha_max), "beta": (0.8, 0.95)},
+            verbose=2,
+            random_state=1,
+        )
+        optimizer.maximize(
+            init_points=init_points, n_iter=(budget // self.test_steps) - init_points
+        )
+        return (
+            optimizer.max["params"]["alpha"],
+            optimizer.max["params"]["beta"],
+            a_s_log,
+            hops_log,
+            x_pool[-1],
+        )
+
+    # look into this later
+    # def find_bal_schedule(self,
+    #                       x_init,
+    #                       alpha_sched,
+    #                       budget=250,
+    #                       init_points=5):
+    #
+    #     def
