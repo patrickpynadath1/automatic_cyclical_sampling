@@ -174,6 +174,90 @@ class CyclicalLangevinSampler(nn.Module):
         res = torch.tensor(res, device=self.device)
         return res
 
+    def adapt_bayes_gp(
+        self,
+        dula_x_init,
+        model,
+        budget,
+        init_big_step,
+        init_small_step,
+        init_big_bal=0.95,
+        init_small_bal=0.5,
+        big_a_s_cut=None,
+        small_a_s_cut=0.5,
+        test_steps=30,
+        lr=0.5,
+        step_zoom_res=5,
+        step_size_pair=None,
+        step_schedule="mod",
+        x_init_to_use="alpha_max",
+        pair_optim=False,
+        bal_resolution=3,
+    ):
+        bdmala = LangevinSampler(
+            dim=self.dim,
+            n_steps=self.n_steps,
+            approx=self.approx,
+            multi_hop=self.multi_hop,
+            fixed_proposal=self.fixed_proposal,
+            step_size=1,
+            mh=True,
+            bal=init_small_bal,
+        )
+        # pre burn in
+        bdmala.mh = False
+        bdmala.step_size = init_big_step
+        bdmala.bal = init_big_bal
+        bal_x_init = dula_x_init
+        for i in range(100):
+            dula_x_init = bdmala.step(dula_x_init, model).detach()
+        bdmala.mh = True
+        total_res = {}
+        b_opt = BayesOptimizer(model, bdmala, test_steps)
+        alpha_min, a_s_log, hops_log, min_x_init = b_opt.find_alpha_min(
+            x_init=dula_x_init,
+            target_a_s=small_a_s_cut,
+            min_bal=init_small_bal,
+            budget=budget // 2,
+        )
+
+        alpha_max, beta_max, a_s_log, hops_log, max_x_init = b_opt.find_max_pair(
+            x_init=min_x_init, alpha_max=init_big_step, budget=budget // 2
+        )
+        alpha_max = alpha_max / 2
+        print(alpha_max)
+        print(beta_max)
+        if step_schedule == "mod":
+            opt_steps = self.calc_stepsizes_mod(alpha_max)
+        else:
+            opt_steps = self.calc_stepsizes(alpha_max)
+
+        for i in range(len(opt_steps)):
+            if opt_steps[i] < alpha_min:
+                break
+        bal_x_init, opt_bal, bal_metrics = estimate_opt_bal(
+            model=model,
+            bdmala=bdmala,
+            x_init=max_x_init,
+            init_bal=beta_max,
+            opt_steps=opt_steps[:i],
+            est_resolution=bal_resolution,
+        )
+
+        while i < len(opt_steps):
+            opt_steps[i] = alpha_min
+            opt_bal.append(init_small_bal)
+            i += 1
+        self.balancing_constants = opt_bal
+        self.step_sizes = opt_steps
+        total_res["bal_metrics"] = bal_metrics
+        print("step sizes: \n")
+        print(self.step_sizes)
+        print("\n")
+        print("bal: \n")
+        print(self.balancing_constants)
+        return bal_x_init, total_res
+
     def adapt_alg_greedy(
         self,
         dula_x_init,
