@@ -32,6 +32,7 @@ def get_gb_trained_rbm_sd(data, train_iter, rbm_name):
     fn = (
         f"figs/rbm_sample_res/{data}/zeroinit_False/rbm_iter_{train_iter}/{rbm_name}.pt"
     )
+    print(fn)
     if os.path.isfile(fn):
         return torch.load(fn)
     return None
@@ -92,7 +93,7 @@ def main(args):
             model.to(device)
             args.rbm_train_iter = "pretrain"
         else:
-            rbm_name = f"rbm_lr_{args.rbm_lr}_n_hidden_{args.n_hidden}"
+            rbm_name = f"rbm_lr_{str(args.rbm_lr)}_n_hidden_{str(args.n_hidden)}"
             sd = get_gb_trained_rbm_sd(args.data, args.rbm_train_iter, rbm_name)
             if sd is not None:
                 print("Model found; omitting unnecessary training")
@@ -106,6 +107,7 @@ def main(args):
 
                 optimizer = torch.optim.Adam(model.parameters(), lr=args.rbm_lr)
 
+                xhat = model.init_dist.sample((args.n_test_samples,)).to(device)
                 # train!
                 itr = 0
                 with tqdm.tqdm(total=args.rbm_train_iter) as pbar:
@@ -255,7 +257,7 @@ def main(args):
             #     a_s_cut=args.burnin_a_s_cut,
             # )
             if args.adapt_strat == "greedy":
-                x, burnin_res = sampler.adapt_alg_greedy(
+                x, burnin_res = sampler.adapt_alg_greedy_mod(
                     x.detach(),
                     model,
                     budget=args.burnin_budget,
@@ -264,12 +266,9 @@ def main(args):
                     init_small_step=0.01,
                     init_big_bal=0.95,
                     init_small_bal=0.5,
-                    big_a_s_cut=0.5,
-                    lr=0.9,
-                    small_a_s_cut=args.a_s_cut,
-                    step_schedule="norm",
+                    lr=args.burnin_lr,
+                    a_s_cut=args.a_s_cut,
                     bal_resolution=args.bal_resolution,
-                    pair_optim=args.pair_optim,
                 )
             else:
                 x, burnin_res = sampler.adapt_bayes_gp(
@@ -278,15 +277,10 @@ def main(args):
                     budget=args.burnin_budget,
                     test_steps=args.burnin_test_steps,
                     init_big_step=30,  # TODO: make not hard coded
-                    init_small_step=0.01,
                     init_big_bal=0.95,
                     init_small_bal=0.5,
-                    big_a_s_cut=0.5,
-                    lr=0.9,
-                    small_a_s_cut=args.a_s_cut,
-                    step_schedule="norm",
+                    a_s_cut=args.a_s_cut,
                     bal_resolution=args.bal_resolution,
-                    pair_optim=args.pair_optim,
                 )
             with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
                 burnin_res["final_steps"] = sampler.step_sizes.cpu().numpy()
@@ -403,7 +397,7 @@ if __name__ == "__main__":
     parser.add_argument("--use_dmala_trained_rbm", action="store_true")
     # rbm def
     parser.add_argument("--rbm_train_iter", type=int, default=10000)
-    parser.add_argument("--n_hidden", type=int, default=500)
+    parser.add_argument("--n_hidden", type=int, default=1000)
     parser.add_argument("--n_visible", type=int, default=784)
     parser.add_argument("--print_every", type=int, default=10)
     parser.add_argument("--viz_every", type=int, default=100)

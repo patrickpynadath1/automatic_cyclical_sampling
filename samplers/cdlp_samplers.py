@@ -174,7 +174,7 @@ class CyclicalLangevinSampler(nn.Module):
         res = torch.tensor(res, device=self.device)
         return res
 
-    def adapt_bayes_gp(
+    def adapt_alg_greedy_mod(
         self,
         dula_x_init,
         model,
@@ -183,15 +183,111 @@ class CyclicalLangevinSampler(nn.Module):
         init_small_step,
         init_big_bal=0.95,
         init_small_bal=0.5,
-        big_a_s_cut=None,
-        small_a_s_cut=0.5,
-        test_steps=30,
+        a_s_cut=0.5,
+        test_steps=10,
         lr=0.5,
         step_zoom_res=5,
         step_size_pair=None,
-        step_schedule="mod",
         x_init_to_use="alpha_max",
-        pair_optim=False,
+        bal_resolution=3,
+    ):
+        bdmala = LangevinSampler(
+            dim=self.dim,
+            n_steps=self.n_steps,
+            approx=self.approx,
+            multi_hop=self.multi_hop,
+            fixed_proposal=self.fixed_proposal,
+            step_size=1,
+            mh=True,
+            bal=init_small_bal,
+        )
+        # pre burn in
+        bdmala.mh = False
+        bdmala.step_size = init_big_step
+        bdmala.bal = init_big_bal
+        bal_x_init = dula_x_init
+        for i in range(100):
+            dula_x_init = bdmala.step(dula_x_init, model).detach()
+        bdmala.mh = True
+        total_res = {}
+        possible_x_inits = [dula_x_init]
+        # estimating alpha min
+        alpha_min_x_init, alpha_min, alpha_min_metrics, itr = estimate_alpha_min(
+            model=model,
+            bdmala=bdmala,
+            x_cur=dula_x_init,
+            budget=budget // 2,
+            init_step_size=init_small_step,
+            test_steps=test_steps,
+            lr=lr,
+            a_s_cut=a_s_cut,
+            init_bal=init_small_bal,
+        )
+        possible_x_inits.append(alpha_min_x_init)
+        (
+            alpha_max_x_init,
+            alpha_max,
+            alpha_max_metrics,
+            itr,
+        ) = estimate_alpha_max(
+            model=model,
+            bdmala=bdmala,
+            a_s_cut=a_s_cut,
+            init_bal=init_big_bal,
+            test_steps=test_steps,
+            budget=budget // 2,
+            init_step_size=init_big_step,
+            x_init=alpha_min_x_init,
+        )
+
+        init_big_bal = bdmala.bal
+        print(init_big_bal)
+        possible_x_inits.append(alpha_max_x_init)
+        total_res["alpha_max_metrics"] = alpha_max_metrics
+        total_res["alpha_min_metrics"] = alpha_min_metrics
+
+        opt_bal = self.calc_balancing_constants(init_big_bal)
+
+        bal_x_init, opt_steps, bal_a_s, bal_hops = estimate_opt_sched(
+            model=model,
+            bdmala=bdmala,
+            x_init=alpha_max_x_init,
+            opt_bal=opt_bal,
+            alpha_max=alpha_max,
+            alpha_min=alpha_min,
+            a_s_cut=a_s_cut,
+            test_steps=1,
+            est_resolution=bal_resolution,
+        )
+        bal_metrics = {"a_s": bal_a_s, "hops": bal_hops}
+        total_res["bal_metrics"] = bal_metrics
+        self.step_sizes = torch.Tensor(opt_steps).to(self.device)
+        self.balancing_constants = opt_bal
+        print("step sizes: \n")
+        print(self.step_sizes)
+        print("\n")
+        print("bal: \n")
+        print(self.balancing_constants)
+        if x_init_to_use == "alpha_min" and step_size_pair is not None:
+            x_init = possible_x_inits[1]
+        elif x_init_to_use == "alpha_max" and step_size_pair is not None:
+            x_init = possible_x_inits[2]
+        elif x_init_to_use == "bal":
+            x_init = possible_x_inits[3]
+        else:
+            x_init = possible_x_inits[0]
+        return x_init, total_res
+
+    def adapt_bayes_gp(
+        self,
+        dula_x_init,
+        model,
+        budget,
+        init_big_step,
+        init_big_bal=0.95,
+        init_small_bal=0.5,
+        a_s_cut=0.5,
+        test_steps=30,
         bal_resolution=3,
     ):
         bdmala = LangevinSampler(
@@ -216,41 +312,42 @@ class CyclicalLangevinSampler(nn.Module):
         b_opt = BayesOptimizer(model, bdmala, test_steps)
         alpha_min, a_s_log, hops_log, min_x_init = b_opt.find_alpha_min(
             x_init=dula_x_init,
-            target_a_s=small_a_s_cut,
+            target_a_s=a_s_cut,
             min_bal=init_small_bal,
             budget=budget // 2,
         )
 
+        alpha_min_metrics = {'a_s': a_s_log, 'hops':hops_log}
         alpha_max, beta_max, a_s_log, hops_log, max_x_init = b_opt.find_max_pair(
-            x_init=min_x_init, alpha_max=init_big_step, budget=budget // 2
+            x_init=min_x_init,
+            alpha_max=init_big_step,
+            budget=budget // 2,
+            a_s_cut=a_s_cut,
         )
+        alpha_max_metrics = {'a_s': a_s_log, 'hops':hops_log}
         alpha_max = alpha_max / 2
         print(alpha_max)
         print(beta_max)
-        if step_schedule == "mod":
-            opt_steps = self.calc_stepsizes_mod(alpha_max)
-        else:
-            opt_steps = self.calc_stepsizes(alpha_max)
 
-        for i in range(len(opt_steps)):
-            if opt_steps[i] < alpha_min:
-                break
-        bal_x_init, opt_bal, bal_metrics = estimate_opt_bal(
+        opt_bal = self.calc_balancing_constants(beta_max)
+
+        bal_x_init, opt_steps, bal_a_s, bal_hops = estimate_opt_sched(
             model=model,
             bdmala=bdmala,
             x_init=max_x_init,
-            init_bal=beta_max,
-            opt_steps=opt_steps[:i],
+            opt_bal=opt_bal,
+            alpha_max=alpha_max,
+            alpha_min=alpha_min,
+            a_s_cut=a_s_cut,
+            test_steps=1,
             est_resolution=bal_resolution,
         )
-
-        while i < len(opt_steps):
-            opt_steps[i] = alpha_min
-            opt_bal.append(init_small_bal)
-            i += 1
+        bal_metrics = {"bal_a_s": bal_a_s, "bal_hops": bal_hops}
         self.balancing_constants = opt_bal
-        self.step_sizes = opt_steps
+        self.step_sizes = torch.Tensor(opt_steps).to(self.device)
         total_res["bal_metrics"] = bal_metrics
+        total_res["alpha_max_metrics"] = alpha_max_metrics
+        total_res["alpha_min_metrics"] = alpha_min_metrics
         print("step sizes: \n")
         print(self.step_sizes)
         print("\n")

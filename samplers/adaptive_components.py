@@ -141,7 +141,7 @@ def estimate_opt_step_greedy(
 
         # updating range min and range max
         step_interval = np.abs(steps_to_test[0] - steps_to_test[1])
-        range_min = max(cur_step - step_interval, 0)
+        range_min = max(cur_step - step_interval, range_min)
         range_max = cur_step + step_interval
     cur_step = cur_step / 2
     hist_metrics = {"a_s": hist_a_s, "alpha_max": hist_alpha_max, "hops": hist_hops}
@@ -158,6 +158,7 @@ def estimate_alpha_max(
     lr=0.5,
     test_steps=10,
     init_bal=0.95,
+    est_resolution=4,
     error_margin=0.01,
 ):
     a_s = 0
@@ -175,7 +176,8 @@ def estimate_alpha_max(
 
     while itr < budget:
         proposal_step = cur_step * (1 - lr * np.abs(a_s - a_s_cut))
-        steps_to_test = [proposal_step, cur_step]
+        # steps_to_test = [proposal_step, cur_step]
+        steps_to_test = np.linspace(proposal_step, cur_step, est_resolution)
         a_s_l, hops_l, x_potential_l = run_hyperparameters(
             model, bdmala, x_cur, test_steps, step_update, steps_to_test
         )
@@ -203,6 +205,7 @@ def estimate_alpha_min(
     a_s_cut=0.5,
     error_margin=0.01,
     init_bal=0.5,
+    est_resolution=4,
 ):
     a_s = 0
     cur_step = init_step_size
@@ -219,8 +222,8 @@ def estimate_alpha_min(
 
     while itr < budget:
         proposal_step = cur_step * (1 + lr * np.abs(a_s - a_s_cut))
-        steps_to_test = [proposal_step, cur_step]
-
+        # steps_to_test = [proposal_step, cur_step]
+        steps_to_test = np.linspace(proposal_step, cur_step, est_resolution)
         a_s_l, hops_l, x_potential_l = run_hyperparameters(
             model, bdmala, x_cur, test_steps, step_update, steps_to_test
         )
@@ -236,6 +239,45 @@ def estimate_alpha_min(
     final_step_size = cur_step
     hist_metrics = {"a_s": hist_a_s, "hops": hist_hops, "alpha_min": hist_alpha_min}
     return x_cur, final_step_size, hist_metrics, itr
+
+
+# TODO: try doing cyclical sched on the balancing constant, not the step size
+def estimate_opt_sched(
+    model,
+    bdmala,
+    x_init,
+    opt_bal,
+    alpha_max,
+    a_s_cut,
+    alpha_min,
+    test_steps=10,
+    est_resolution=10,
+):
+    hist_a_s = []
+    hist_hops = []
+
+    def update_step(sampler, alpha):
+        sampler.step_size = alpha
+
+    prev_step = alpha_max
+    opt_steps = []
+    for i in range(1, len(opt_bal) - 1):
+        bal_val = opt_bal[i]
+        bdmala.bal = bal_val
+        proposal_steps = np.linspace(alpha_min, prev_step, est_resolution)
+        a_s_l, hops_l, x_potential_l = run_hyperparameters(
+            model, bdmala, x_init, test_steps, update_step, proposal_steps
+        )
+        eval_a_s_l = [np.abs(a - a_s_cut) for a in a_s_l]
+        cur_step, a_s, hops, x_cur = update_hyperparam_metrics(
+            np.argmin(eval_a_s_l), proposal_steps, a_s_l, hops_l, x_potential_l
+        )
+        hist_a_s.append(a_s)
+        hist_hops.append(hops)
+        opt_steps.append(cur_step)
+        prev_step = cur_step
+    opt_steps = [alpha_max] + opt_steps + [alpha_min]
+    return x_cur, opt_steps, hist_a_s, hist_hops
 
 
 def estimate_opt_bal(
@@ -317,7 +359,7 @@ class BayesOptimizer:
 
         optimizer = bayes_opt.BayesianOptimization(
             f=acceptance_function,
-            pbounds={"alpha": (0, 1)},
+            pbounds={"alpha": (0.01, alpha_max)},
             verbose=2,
             random_state=1,
         )
@@ -328,7 +370,7 @@ class BayesOptimizer:
         )
         return optimizer.max["params"]["alpha"], a_s_log, hops_log, x_pool[-1]
 
-    def find_max_pair(self, x_init, alpha_max, budget=250, init_points=10):
+    def find_max_pair(self, x_init, alpha_max, budget=250, init_points=10, a_s_cut=0.5):
         a_s_log = []
         hops_log = []
         x_pool = [x_init]
@@ -344,12 +386,12 @@ class BayesOptimizer:
             x_pool.append(x_cur)
             a_s_log.append(a_s)
             hops_log.append(hops_mean)
-            obj = -np.abs(a_s - 0.5)
+            obj = -np.abs(a_s - a_s_cut)
             return obj
 
         optimizer = bayes_opt.BayesianOptimization(
             f=hops_function,
-            pbounds={"alpha": (0.2, alpha_max), "beta": (0.8, 0.95)},
+            pbounds={"alpha": (0.01, alpha_max), "beta": (0.8, 0.95)},
             verbose=2,
             random_state=1,
         )
@@ -363,12 +405,3 @@ class BayesOptimizer:
             hops_log,
             x_pool[-1],
         )
-
-    # look into this later
-    # def find_bal_schedule(self,
-    #                       x_init,
-    #                       alpha_sched,
-    #                       budget=250,
-    #                       init_points=5):
-    #
-    #     def
