@@ -54,11 +54,40 @@ class PerDimGibbsSamplerOrd(nn.Module):
         return 0.0
 
 
-class PerDimMetropolisSampler(nn.Module):
-    def __init__(self, dim, n_out, rand=False):
+class RandWalkOrd(nn.Module):
+    def __init__(self, dim, max_val, rand=False):
         super().__init__()
         self.dim = dim
-        self.n_out = n_out
+        self.changes = torch.zeros((dim,))
+        self.change_rate = 0.0
+        self.p = nn.Parameter(torch.zeros((dim,)))
+        self._i = 0
+        self._ar = 0.0
+        self._hops = 0.0
+        self._phops = 1.0
+        self.rand = rand
+        self.max_val = max_val
+
+    def step(self, x, model):
+        sample = x.clone()
+        cat_dist = dists.categorical.Categorical(
+            torch.zeros((sample.size(0), self.dim, self.max_val)).to(sample.device)
+        )
+        new_coords = cat_dist.sample()
+
+        a = (la > torch.rand_like(la)).float()
+        x = new_coords * a[:, None] + x * (1.0 - a[:, None])
+        return x
+
+    def logp_accept(self, xhat, x, model):
+        # only true if xhat was generated from self.step(x, model)
+        return 0.0
+
+
+class PerDimMetropolisSamplerOrd(nn.Module):
+    def __init__(self, dim, dist_to_test, max_val, rand=False):
+        super().__init__()
+        self.dim = dim
         self.changes = torch.zeros((dim,))
         self.change_rate = 0.0
         self.p = nn.Parameter(torch.zeros((dim,)))
@@ -68,6 +97,8 @@ class PerDimMetropolisSampler(nn.Module):
         self._hops = 0.0
         self._phops = 0.0
         self.rand = rand
+        self.max_val = max_val
+        self.dist_to_test = dist_to_test
 
     def step(self, x, model):
         if self.rand:
@@ -76,20 +107,39 @@ class PerDimMetropolisSampler(nn.Module):
             i = self._i
 
         logits = []
-        ndim = x.size(-1)
-
-        for k in range(ndim):
-            sample = x.clone()
-            sample_i = torch.zeros((ndim,))
-            sample_i[k] = 1.0
-            sample[:, i, :] = sample_i
-            lp_k = model(sample).squeeze()
-            logits.append(lp_k[:, None])
-        logits = torch.cat(logits, 1)
-        dist = dists.OneHotCategorical(logits=logits)
+        # ndim = x.size(-1)
+        logits = torch.zeros((x.size(0), self.max_val)).to(x.device)
+        len_values_to_test = 2 * self.dist_to_test + 1
+        values_to_test = (
+            torch.arange(-self.dist_to_test, self.dist_to_test + 1, step=1)[:, None]
+            .repeat((x.size(0), 1))
+            .to(x.device)
+        )
+        x_expanded = torch.repeat_interleave(x, len_values_to_test, dim=0)
+        x_expanded[:, i] = torch.clamp(
+            x_expanded[:, i] - values_to_test[:, 0], min=0, max=self.max_val - 1
+        )
+        coordinates_tested = x_expanded[:, i].reshape((x.size(0), len_values_to_test))
+        energies = model(x_expanded).squeeze().reshape((x.size(0), len_values_to_test))
+        logits[torch.arange(logits.size(0)).unsqueeze(1), coordinates_tested] = energies
+        #
+        #
+        #
+        # for k in range(-self.dist_to_test, self.dist_to_test + 1):
+        #     sample = x.clone()
+        #     # sample_i = torch.zeros((ndim,))
+        #     # sample_i[k] = 1.0
+        #     sample[:, i] = sample[:, i] + k
+        #     # make sure values fall inside sample space
+        #     sample[sample < 0] = 0
+        #     sample[sample >= self.max_val] = self.max_val - 1
+        #
+        #     lp_k = model(sample).squeeze()
+        #     logits[:, sample[:, self._i]] = lp_k
+        dist = dists.Categorical(logits=logits)
         updates = dist.sample()
         sample = x.clone()
-        sample[:, i, :] = updates
+        sample[:, i] = updates
         self._i = (self._i + 1) % self.dim
         self._hops = ((x != sample).float().sum(-1) / 2.0).sum(-1).mean().item()
         self._ar = self._hops

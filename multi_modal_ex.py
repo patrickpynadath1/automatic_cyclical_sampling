@@ -10,7 +10,12 @@ import argparse
 from samplers import PerDimGibbsSamplerOrd
 from torch.distributions import Binomial
 from torch import tensor
-from samplers import LangevinSamplerOrdinal, CyclicalLangevinSamplerOrdinal
+from samplers import (
+    LangevinSamplerOrdinal,
+    CyclicalLangevinSamplerOrdinal,
+    RandWalkOrd,
+    PerDimMetropolisSamplerOrd,
+)
 from tqdm import tqdm
 
 from asbs_code.GBS.sampling.globally import AnyscaleBalancedSampler
@@ -251,6 +256,8 @@ def get_sampler(args, dim, device):
         )
     elif args.sampler == "gibbs":
         sampler = PerDimGibbsSamplerOrd(dim=2, max_val=dim)
+    elif args.sampler == "rw":
+        sampler = PerDimMetropolisSamplerOrd(dim=2, max_val=dim, dist_to_test=100)
     elif args.sampler == "asb":
         sampler = AnyscaleBalancedSampler(
             args, cur_type="1st", sigma=0.1, alpha=0.5, adaptive=1
@@ -263,12 +270,12 @@ def main(args):
         "cuda:" + str(args.cuda_id) if torch.cuda.is_available() else "cpu"
     )
 
-    # dim, modes_to_use = get_modes(args.num_modes, args.space_between_modes)
-    if args.modality == "unimodal":
-        modes_to_use = UNIMODAL
-    else:
-        modes_to_use = MULTIMODAL
-    dim = DIM
+    dim, modes_to_use = get_modes(args.num_modes, args.space_between_modes)
+    # if args.modality == "unimodal":
+    #     modes_to_use = UNIMODAL
+    # else:
+    #     modes_to_use = MULTIMODAL
+    # dim = DIM
     if args.dist_type == "heat":
         energy_function = MM_Heat(
             ss_dim=dim,
@@ -298,7 +305,7 @@ def main(args):
         dist_img[coord[0], coord[1]] = probs[i]
 
     pickle.dump(tensor(dist_img), open(f"{cur_dir}/gt.pickle", "wb"))
-    plt.imshow(dist_img)
+    plt.imshow(dist_img, cmap="Blues")
 
     plt.axis("off")
     plt.savefig(f"{cur_dir}/init_dist.svg")
@@ -325,7 +332,7 @@ def main(args):
         )
         pickle.dump(burnin_res, open(f"{cur_dir}/burnin_res.pickle", "wb"))
     x_init = None
-    if args.sampler in ["gibbs", "asb", "dula", "cyc_dula"]:
+    if args.sampler in ["gibbs", "asb", "dula", "cyc_dula", "rw"]:
         show_a_s = False
     else:
         show_a_s = True
@@ -346,7 +353,7 @@ def main(args):
         est_img[coord[0], coord[1]] += 1
     pickle.dump(chain_a_s, open(f"{cur_dir}/chain_a_s.pickle", "wb"))
     pickle.dump(est_img, open(f"{cur_dir}/actual_probs.pickle", "wb"))
-    plt.imshow(est_img)
+    plt.imshow(est_img, cmap="Blues")
     plt.axis("off")
     plt.savefig(f"{cur_dir}/est_dist.png")
     plt.savefig(f"{cur_dir}/est_dist.svg")

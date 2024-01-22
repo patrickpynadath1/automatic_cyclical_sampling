@@ -5,4 +5,8 @@ from .misc_samplers import PerDimGibbsSampler, PerDimMetropolisSampler
 from .misc_samplers import PerDimLB, GibbsSampler
 from .ordinal_dlp import LangevinSamplerOrdinal
 from .ordinal_cyc_dlp import CyclicalLangevinSamplerOrdinal
-from .classical_samplers_ord import PerDimGibbsSamplerOrd
+from .classical_samplers_ord import (
+    PerDimGibbsSamplerOrd,
+    RandWalkOrd,
+    PerDimMetropolisSamplerOrd,
+)
