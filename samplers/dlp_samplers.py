@@ -4,6 +4,7 @@ import torch.nn as nn
 import torch.distributions as dists
 import utils
 import numpy as np
+from .adaptive_components import estimate_alpha_max
 
 device = torch.device("cuda:" + str(0) if torch.cuda.is_available() else "cpu")
 
@@ -23,7 +24,7 @@ class LangevinSampler(nn.Module):
         use_big=False,
         burn_in_adaptive=False,
         burn_in_budget=500,
-        adapt_alg="twostage_optim",
+        adapt_alg="bayes",
     ):
         super().__init__()
         self.dim = dim
@@ -73,6 +74,92 @@ class LangevinSampler(nn.Module):
             name = f"{base}_stepsize_{self.step_size}_{self.bal}"
 
         return name
+
+    def adapt_big_step(
+        self,
+        x_cur,
+        model,
+        budget,
+        test_steps,
+        lr,
+        init_big_step,
+        a_s_cut,
+        init_bal,
+        use_dula,
+    ):
+        orig_mh = self.mh
+        self.bal = init_bal
+        for i in range(100):
+            x_cur = self.step(x_cur.detach(), model)
+        self.mh = orig_mh
+        (
+            x_cur,
+            alpha_max,
+            alpha_max_metrics,
+            _,
+        ) = estimate_alpha_max(
+            model=model,
+            bdmala=self,
+            a_s_cut=a_s_cut,
+            init_bal=init_bal,
+            test_steps=test_steps,
+            budget=budget,
+            init_step_size=init_big_step,
+            x_init=x_cur,
+            use_dula=use_dula,
+            lr=lr,
+        )
+        self.step_size = alpha_max
+        self.bal = init_bal
+        return x_cur, alpha_max, alpha_max_metrics
+
+    def run_bayes_burnin(
+        self,
+        x_init,
+        model,
+        test_steps,
+        steps_obj,
+        budget,
+        init_big_step=30,
+        init_big_bal=0.95,
+    ):
+        if steps_obj == "alpha_min":
+            init_bal = 0.95
+        else:
+            init_bal = 0.5
+        bdmala = LangevinSampler(
+            dim=self.dim,
+            n_steps=self.n_steps,
+            approx=self.approx,
+            multi_hop=self.multi_hop,
+            fixed_proposal=self.fixed_proposal,
+            step_size=1,
+            mh=True,
+            bal=init_bal,
+        )
+        # pre burn in
+        bdmala.mh = False
+        bdmala.step_size = init_big_step
+        bdmala.bal = init_big_bal
+        dula_x_init = x_init
+        for i in range(100):
+            dula_x_init = bdmala.step(dula_x_init, model).detach()
+        bdmala.mh = True
+        b_opt = BayesOptimizer(model, bdmala, test_steps, bal_optimizers=0)
+        if steps_obj == "alpha_min":
+            alpha, a_s_log, hops_log, min_x_init = b_opt.find_alpha_min(
+                x_init=dula_x_init,
+                budget=budget // 2,
+            )
+            beta = 0.5
+        else:
+            alpha, beta, a_s_log, hops_log, max_x_init = b_opt.find_max_pair(
+                x_init=dula_x_init,
+                budget=budget // 2,
+            )
+        self.step_size = alpha
+        self.bal = beta
+        return dula_x_init
 
     def run_adaptive_burnin(
         self,
@@ -139,7 +226,7 @@ class LangevinSampler(nn.Module):
 
         return x_cur, {"step-adapt-hist": hist_metrics}
 
-    def step(self, x, model):
+    def step(self, x, model, use_dula=False):
         x_cur = x
 
         m_terms = []
@@ -180,7 +267,10 @@ class LangevinSampler(nn.Module):
                     torch.ones_like(la, device=la.device), la.exp()
                 )
                 self.a_s.append(probs_tmp.detach().mean().item())
-                x_cur = x_delta * a[:, None] + x_cur * (1.0 - a[:, None])
+                if use_dula:
+                    x_cur = x_delta
+                else:
+                    x_cur = x_delta * a[:, None] + x_cur * (1.0 - a[:, None])
             else:
                 x_cur = x_delta
         return x_cur

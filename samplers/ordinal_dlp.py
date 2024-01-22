@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import numpy as np
 
 
 # DLP but for ordinal values
@@ -26,13 +27,15 @@ class LangevinSamplerOrdinal(nn.Module):
         self._phops = 0.0
         self.multi_hop = multi_hop
         self.temp = temp
-        self.step_size = step_size  # rbm sampling: accpt prob is about 0.5 with lr = 0.2, update 16 dims per step (total 784 dims). ising sampling: accept prob 0.5 with lr=0.2
+        # rbm sampling: accpt prob is about 0.5 with lr = 0.2, update 16 dims per step (total 784 dims). ising sampling: accept prob 0.5 with lr=0.2
         # ising learning: accept prob=0.7 with lr=0.2
         # ebm: statistic mnist: accept prob=0.45 with lr=0.2
         self.a_s = []
         self.bal = bal
         self.mh = mh
         self.max_val = max_val  ### number of classes in each dimension
+        self.step_size = (step_size * self.max_val) * (self.dim**2)
+        # self.step_size = step_size
 
     def get_grad(self, x, model):
         x = x.requires_grad_()
@@ -47,13 +50,13 @@ class LangevinSamplerOrdinal(nn.Module):
         disc_values = disc_values.repeat((batch_size, self.dim, 1)).to(x_cur.device)
         term1 = torch.zeros((batch_size, self.dim, self.max_val))
         term2 = torch.zeros((batch_size, self.dim, self.max_val))
-        x_expanded = x_cur[:, :, None].repeat((1, 1, 64)).to(x_cur.device)
-        grad_expanded = grad[:, :, None].repeat((1, 1, 64)).to(x_cur.device)
+        x_expanded = x_cur[:, :, None].repeat((1, 1, self.max_val)).to(x_cur.device)
+        grad_expanded = grad[:, :, None].repeat((1, 1, self.max_val)).to(x_cur.device)
         term1 = self.bal * grad_expanded * (disc_values - x_expanded)
         term2 = (disc_values - x_expanded) ** 2 * (1 / (2 * self.step_size))
         return self.bal * term1 - term2
 
-    def step(self, x, model):
+    def step(self, x, model, use_dula=False):
         """
         input x : bs * dim, every dim contains a integer of 0 to (num_cls-1)
         """

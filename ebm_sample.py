@@ -7,11 +7,14 @@ import os
 import tensorflow_probability as tfp
 import tqdm
 import mlp
+from samplers import LangevinSampler
 from pcd_ebm_ema import get_sampler, EBM
 import torchvision
 from rbm_sample import get_ess
+import mmd
 from config_cmdline import config_adaptive_args, config_sampler_args, config_SbC_args
 import pickle
+import time
 
 
 def sqrt(x):
@@ -64,7 +67,10 @@ def main(args):
         raise ValueError("invalid model definition")
 
     sampler = get_sampler(args)
-    sampler_name = sampler.get_name()
+    if args.sampler in ["dmala", "dula", "cyc_dmala", "cyc_dula"]:
+        sampler_name = sampler.get_name()
+    else:
+        sampler_name = args.sampler
     if args.burnin_adaptive:
         sampler_name += "_adapt_burnin"
         sampler_name += f"_lr_{args.burnin_lr}"
@@ -87,14 +93,43 @@ def main(args):
 
     d = torch.load(f"{args.ckpt_path}")
     model.load_state_dict(d["ema_model"])
-
+    model.L = 1
     x_init = init_dist.sample((args.samples_to_generate,)).to(device)
+    gt = init_dist.sample((args.samples_to_generate * 2,)).to(device)
     if args.zero_init:
         x_init = torch.zeros_like(x_init).to(device)
     model = model.to(device)
 
-    # TODO: add in measuring of energies for different digits from rbm sample
+    # TODO:: make the ground truth DMALA, similar to GB in RBM sample
+    gt_sampler = LangevinSampler(
+        np.prod(args.input_size),
+        n_steps=1,
+        bal=0.5,
+        fixed_proposal=False,
+        approx=True,
+        multi_hop=False,
+        temp=1.0,
+        step_size=0.2,
+        mh=True,
+    )
+    for i in tqdm.tqdm(range(args.gt_sample_steps), desc="gt_chain"):
+        gt = gt_sampler.step(gt.detach(), model)
 
+    kmmd = mmd.MMD(mmd.exp_avg_hamming, False)
+    gt_samples, gt_samples2 = gt[: args.n_samples], gt[args.n_samples :]
+    cur_dir_pre = f"{args.save_dir}/{args.data}/zeroinit_{args.zero_init}"
+    if args.sampler in ["cyc_dmala", "dmala", "dula", "dmala"]:
+        model_name = sampler.get_name()
+    else:
+        model_name = args.sampler
+    cur_dir = f"{cur_dir_pre}/{model_name}"
+    os.makedirs(cur_dir_pre, exist_ok=True)
+    os.makedirs(cur_dir, exist_ok=True)
+    if plot is not None:
+        plot("{}/ground_truth.png".format(cur_dir_pre), gt_samples2)
+    opt_stat = kmmd.compute_mmd(gt_samples2, gt_samples)
+    print("gt <--> gt log-mmd", opt_stat, opt_stat.log10())
+    pickle.dump(opt_stat.log10().cpu(), open(cur_dir_pre + "/gt_log_mmds.pt", "wb"))
     if args.get_base_energies:
         digit_energies = []
         digit_values = []
@@ -108,30 +143,25 @@ def main(args):
     energies = []
     hops = []
     sample_var = []
+    log_mmds = []
+    times = []
+    hops = []
     if args.burnin_adaptive:
-        # x_init, burnin_res = sampler.run_adaptive_burnin(
-        #     x_init.detach(),
-        #     model,
-        #     budget=args.burnin_budget,
-        #     steps_obj="alpha_max",
-        #     lr=args.burnin_lr,
-        #     test_steps=args.burnin_test_steps,
-        #     a_s_cut=args.burnin_a_s_cut,
-        # )
-
-        x_init, burnin_res = sampler.adapt_alg_greedy(
+        _, burnin_res = sampler.adapt_alg_greedy_mod(
             x_init.detach(),
             model,
             budget=args.burnin_budget,
             test_steps=args.burnin_test_steps,
             init_big_step=30,  # TODO: make not hard coded
-            init_small_step=0.01,
+            init_small_step=0.05,
             init_big_bal=0.95,
             init_small_bal=0.5,
-            lr=0.9,
-            small_a_s_cut=args.a_s_cut,
-            big_a_s_cut=0.5,
+            lr=args.burnin_lr,
+            a_s_cut=args.a_s_cut,
+            bal_resolution=args.bal_resolution,
+            use_bal_cyc=False,
         )
+
         with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
             pickle.dump(burnin_res, f)
     if "cyc" in args.sampler:
@@ -141,7 +171,10 @@ def main(args):
     interpolation_distances = list(np.linspace(0, 1, 10))
     interp_energies = [[] for _ in range(len(interpolation_distances))]
     to_interp = []
+
+    cur_time = 0.0
     for itr in tqdm.tqdm(range(args.sampling_steps)):
+        st = time.time()
         if "cyc" in args.sampler:
             x_cur = sampler.step(x_init, model, itr)
         else:
@@ -151,21 +184,18 @@ def main(args):
                 if args.sampler == "dmala":
                     sampler.mh = True
             x_cur = sampler.step(x_init, model)
-        if itr % itr_per_cycle == 0:
-            to_interp.append(x_cur.clone().detach())
-        if len(to_interp) == 2:
-            for i, d in enumerate(interpolation_distances):
-                interp_energies[i] += interpolate_samples(
-                    to_interp[0], to_interp[1], d, model
-                )
-            to_interp = []
-        # calculate the hops
-        cur_sample_var = torch.var(x_cur, dim=1)
-        mean_var = torch.mean(cur_sample_var).detach().cpu().item()
-        sample_var.append(mean_var)
 
-        h = (x_cur != x_init).float().view(x_init.size(0), -1).sum(-1).mean().item()
-        hops.append(h)
+        cur_time += time.time() - st
+        cur_hops = (x_cur != x_init).float().sum(-1).mean().item()
+        # calculate the hops
+        if itr % args.print_every == 0:
+            hard_samples = x_cur
+            stat = kmmd.compute_mmd(hard_samples, gt_samples)
+            log_stat = stat.log().item()
+            log_mmds.append(log_stat)
+            times.append(cur_time)
+
+        hops.append(cur_hops)
 
         # calculate the energies
         with torch.no_grad():
@@ -177,6 +207,10 @@ def main(args):
             plot(f"{cur_dir}/step_{itr}.png", x_init)
         x_init = x_cur
 
+    with open(f"{cur_dir}/times.pickle", "wb") as f:
+        pickle.dump(times, f)
+    with open(f"{cur_dir}/log_mmds.pickle", "wb") as f:
+        pickle.dump(log_mmds, f)
     with open(f"{cur_dir}/hops.pickle", "wb") as f:
         pickle.dump(hops, f)
     with open(f"{cur_dir}/energies.pickle", "wb") as f:
@@ -189,8 +223,6 @@ def main(args):
     if args.get_base_energies:
         with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
             pickle.dump(digit_energy_res, f)
-    with open(f"{cur_dir}/sample_var.pickle", "wb") as f:
-        pickle.dump(sample_var, f)
     pass
 
 
@@ -229,6 +261,8 @@ if __name__ == "__main__":
     )
     parser.add_argument("--no_ess", action="store_true")
     parser.add_argument("--test_batch_size", type=int, default=100)
+    parser.add_argument("--scheduler_buffer_size", type=int, default=100)
+    parser.add_argument("--verbose", type=int, default=0)
     parser.add_argument("--base_dist", action="store_true")
     parser.add_argument("--sampler", type=str, default="cyc_dmala")
     parser.add_argument("--cuda_id", type=int, default=0)
@@ -236,10 +270,13 @@ if __name__ == "__main__":
     # may have an impact on burn in and acceptance rate
     parser.add_argument("--initial_mh", action="store_true")
     parser.add_argument("--zero_init", action="store_true")
+    parser.add_argument("--gt_sample_steps", type=int, default=100000)
+
     # adaptive arguments here
     parser = config_adaptive_args(parser)
     parser = config_sampler_args(parser)
     parser = config_SbC_args(parser)
+    parser.add_argument("--data", type=str, default="mnist")
     parser.add_argument("--get_base_energies", action="store_true")
     args = parser.parse_args()
     args.n_steps = args.sampling_steps

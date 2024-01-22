@@ -13,23 +13,34 @@ class AISModel(nn.Module):
     def forward(self, x, beta):
         logpx = self.model(x).squeeze()
         logpi = self.init_dist.log_prob(x).sum(-1)
-        return logpx * beta + logpi * (1. - beta)
+        return logpx * beta + logpi * (1.0 - beta)
 
 
-def evaluate(model, init_dist, sampler,
-             train_loader, val_loader, test_loader,
-             preprocess, device,
-             n_iters, n_samples, steps_per_iter=1, viz_every=100, is_cyclical=False):
-
+def evaluate(
+    model,
+    init_dist,
+    sampler,
+    train_loader,
+    val_loader,
+    test_loader,
+    preprocess,
+    device,
+    n_iters,
+    n_samples,
+    steps_per_iter=1,
+    viz_every=100,
+    is_cyclical=False,
+    is_rbm=False,
+):
     model = AISModel(model, init_dist)
 
     # move to cuda
     model.to(device)
 
     # annealing weights
-    betas = np.linspace(0., 1., n_iters)
+    betas = np.linspace(0.0, 1.0, n_iters)
 
-    samples = init_dist.sample((n_samples,))
+    samples = init_dist.sample((n_samples,)).to(device)
     log_w = torch.zeros((n_samples,)).to(device)
 
     gen_samples = []
@@ -45,8 +56,10 @@ def evaluate(model, init_dist, sampler,
         # update samples
         model_k = lambda x: model(x, beta=beta_k)
         for d in range(steps_per_iter):
-            if is_cyclical:
-                samples = sampler.step(samples.detach(), model_k, d).detach()
+            if is_rbm:
+                samples = model.model.gibbs_sample(
+                    v=samples.detach(), n_steps=1
+                ).detach()
             else:
                 samples = sampler.step(samples.detach(), model_k).detach()
 

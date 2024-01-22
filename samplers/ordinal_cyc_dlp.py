@@ -66,6 +66,9 @@ class CyclicalLangevinSamplerOrdinal(nn.Module):
             self.iter_per_cycle = iter_per_cycle
         else:
             self.iter_per_cycle = math.ceil(self.num_iters / self.num_cycles)
+        mean_stepsize_actual = torch.Tensor([mean_stepsize * self.max_val]).to(
+            self.device
+        ) ** (self.dim**2)
         self.step_sizes = self.calc_stepsizes(mean_stepsize)
         self.diff_values = []
         self.flip_probs = []
@@ -116,13 +119,13 @@ class CyclicalLangevinSamplerOrdinal(nn.Module):
         return name
 
     def min_lr_cutoff(self):
-        if self.mh:
-            min_step = 0.2
-        else:
-            min_step = 0.1
+        actual_val = torch.Tensor([self.min_lr * self.max_val]).to(self.device) ** (
+            self.dim**2
+        )
+        # actual_val = self.min_lr
         for i in range(len(self.step_sizes)):
-            if self.step_sizes[i] <= min_step:
-                self.step_sizes[i] = min_step
+            if self.step_sizes[i] <= actual_val:
+                self.step_sizes[i] = actual_val
                 self.balancing_constants[i] = 0.5
 
     def calc_stepsizes(self, mean_step):
@@ -133,8 +136,9 @@ class CyclicalLangevinSamplerOrdinal(nn.Module):
             cur_step_size = mean_step * (np.cos(inner) + 1)
             step_size = cur_step_size
             res.append(step_size)
-        res = torch.tensor(res, device=self.device)
+        res = (torch.tensor(res, device=self.device) * self.max_val) ** (self.dim**2)
         return res
+        # return torch.Tensor(res).to(self.device)
 
     def calc_opt_acc_rate(self):
         res = []
@@ -243,23 +247,22 @@ class CyclicalLangevinSamplerOrdinal(nn.Module):
         return x_cur, final_step_size, hist_metrics, itr
 
     # not going to edit this -- this is what provided the sampling results, so best to not touch
-    def run_adaptive_burnin(
+    def adapt_alg_greedy_mod(
         self,
-        x_init,
+        dula_x_init,
         model,
         budget,
+        init_big_step,
+        init_small_step,
+        init_big_bal=0.95,
+        init_small_bal=0.5,
+        a_s_cut=0.5,
         test_steps=10,
-        steps_obj="alpha_min",
-        bal_est_resolution=3,
-        init_bal=0.95,
-        a_s_cut=0.6,
         lr=0.5,
-        error_margin_alphamax=0.01,
-        error_margin_a_s_min=0.01,
-        error_margin_hops_min=5,
-        decrease_val_decay=0.5,
-        init_step_size=None,
-        tune_stepsize=True,
+        step_zoom_res=5,
+        step_size_pair=None,
+        x_init_to_use="bal",
+        bal_resolution=3,
     ):
         bdmala = LangevinSamplerOrdinal(
             dim=self.dim,
@@ -267,62 +270,87 @@ class CyclicalLangevinSamplerOrdinal(nn.Module):
             multi_hop=self.multi_hop,
             step_size=1,
             mh=True,
-            bal=init_bal,
-            max_val=self.max_val,
+            bal=init_small_bal,
         )
+        # pre burn in
+        bdmala.mh = False
+        bdmala.step_size = init_big_step
+        bdmala.bal = init_big_bal
+        bal_x_init = dula_x_init
+        for i in range(100):
+            dula_x_init = bdmala.step(dula_x_init, model).detach()
+        bdmala.mh = True
         total_res = {}
-        if not init_step_size:
-            init_step_size = (2 * self.max_val**2) ** 0.5
-        if tune_stepsize:
-            if steps_obj == "alpha_max":
-                res = estimate_alpha_max(
-                    model,
-                    bdmala,
-                    x_init,
-                    budget,
-                    init_step_size,
-                    a_s_cut=a_s_cut,
-                    lr=lr,
-                    test_steps=test_steps,
-                    init_bal=init_bal,
-                    error_margin=error_margin_alphamax,
-                )
-            else:
-                res = estimate_alpha_min(
-                    model,
-                    bdmala,
-                    x_init,
-                    budget,
-                    init_step_size,
-                    test_steps=test_steps,
-                    error_margin_a_s=error_margin_a_s_min,
-                    error_margin_hops=error_margin_hops_min,
-                    decrease_val_decay=decrease_val_decay,
-                    init_bal=init_bal,
-                )
-            x_cur, final_step_size, hist_metrics, itr = res
-            total_res["step-adapt-hist"] = hist_metrics
-        else:
-            final_step_size = init_step_size
-            x_cur = x_init
-        opt_steps = self.calc_stepsizes(final_step_size)
-        x_cur, opt_bal, hist_metrics_bal = estimate_opt_bal(
-            model,
-            bdmala,
-            x_cur,
-            opt_steps,
+        possible_x_inits = [dula_x_init]
+        # estimating alpha min
+        use_dula = not self.mh
+
+        def step_update(sampler, alpha):
+            sampler.step_size = alpha * (self.max_val**2) ** self.dim
+
+        alpha_min_x_init, alpha_min, alpha_min_metrics, itr = estimate_alpha_min(
+            model=model,
+            bdmala=bdmala,
+            x_cur=dula_x_init,
+            budget=budget // 2,
+            init_step_size=init_small_step,
             test_steps=test_steps,
-            init_bal=init_bal,
-            est_resolution=bal_est_resolution,
+            lr=lr,
+            a_s_cut=a_s_cut,
+            init_bal=init_small_bal,
+            use_dula=use_dula,
+            step_update=step_update,
         )
-        total_res["bal-adapt-hist"] = hist_metrics_bal
-        self.step_sizes = opt_steps
+        print(alpha_min)
+        possible_x_inits.append(alpha_min_x_init)
+        (alpha_max_x_init, alpha_max, alpha_max_metrics, itrr) = estimate_alpha_max(
+            model=model,
+            bdmala=bdmala,
+            a_s_cut=a_s_cut,
+            init_bal=init_big_bal,
+            test_steps=test_steps,
+            budget=budget // 2,
+            init_step_size=2,
+            x_init=alpha_min_x_init,
+            use_dula=use_dula,
+            step_update=step_update,
+        )
+
+        init_big_bal = bdmala.bal
+        print(init_big_bal)
+        possible_x_inits.append(alpha_max_x_init)
+        total_res["alpha_max_metrics"] = alpha_max_metrics
+        total_res["alpha_min_metrics"] = alpha_min_metrics
+
+        opt_steps = self.calc_stepsizes(alpha_max / 2)
+        for i in range(len(opt_steps)):
+            if opt_steps[i] < alpha_min:
+                break
+        bal_x_init, opt_bal, bal_metrics = estimate_opt_bal(
+            model=model,
+            bdmala=bdmala,
+            x_init=dula_x_init,
+            init_bal=init_big_bal,
+            opt_steps=opt_steps[:i],
+            est_resolution=bal_resolution,
+            test_steps=test_steps,
+            use_dula=use_dula,
+        )
+        possible_x_inits.append(bal_x_init)
+
+        while i < len(opt_steps):
+            opt_steps[i] = alpha_min
+            opt_bal.append(init_small_bal)
+            i += 1
         self.balancing_constants = opt_bal
-        if self.min_lr:
-            self.min_lr_cutoff()
-        print(f"steps: {self.step_sizes}")
-        print(f"bal: {self.balancing_constants}")
-        return x_cur, total_res
+        self.step_sizes = opt_steps
+        total_res["bal_metrics"] = bal_metrics
+        print("step sizes: \n")
+        print(self.step_sizes)
+        print("\n")
+        print("bal: \n")
+        print(self.balancing_constants)
+        return dula_x_init, total_res
 
     def get_grad(self, x, model):
         x = x.requires_grad_()
@@ -337,8 +365,8 @@ class CyclicalLangevinSamplerOrdinal(nn.Module):
         disc_values = disc_values.repeat((batch_size, self.dim, 1)).to(x_cur.device)
         term1 = torch.zeros((batch_size, self.dim, self.max_val))
         term2 = torch.zeros((batch_size, self.dim, self.max_val))
-        x_expanded = x_cur[:, :, None].repeat((1, 1, 64)).to(x_cur.device)
-        grad_expanded = grad[:, :, None].repeat((1, 1, 64)).to(x_cur.device)
+        x_expanded = x_cur[:, :, None].repeat((1, 1, self.max_val)).to(x_cur.device)
+        grad_expanded = grad[:, :, None].repeat((1, 1, self.max_val)).to(x_cur.device)
         term1 = grad_expanded * (disc_values - x_expanded) * bal
         term2 = (disc_values - x_expanded) ** 2 * (1 / (2 * step_size))
         return term1 - term2

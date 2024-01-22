@@ -73,7 +73,7 @@ def get_dlp_samplers(temp, dim, device, args):
             use_big=args.use_big,
             burn_in_budget=args.burnin_budget,
             burn_in_adaptive=args.burnin_adaptive,
-            adapt_alg=args.burnin_step_obj,
+            adapt_alg=args.step_obj,
         )
 
     else:

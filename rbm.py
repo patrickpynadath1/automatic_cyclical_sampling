@@ -22,6 +22,7 @@ class BernoulliRBM(nn.Module):
         else:
             self.init_dist = dists.Bernoulli(probs=torch.ones((n_visible,)) * .5)
         self.data_dim = n_visible
+        self.L = 1
 
     def p_v_given_h(self, h):
         logits = h @ self.W + self.b_v[None]

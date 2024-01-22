@@ -21,6 +21,7 @@ from config_cmdline import (
     config_SbC_args,
     potential_datasets,
 )
+from asbs_code.GBS.sampling.globally import AnyscaleBalancedSampler
 
 
 def get_dmala_trained_rbm_sd(data, n_hidden):
@@ -85,7 +86,6 @@ def main(args):
             init_data.append(x)
         init_data = torch.cat(init_data, 0)
         init_mean = init_data.mean(0).clamp(0.01, 0.99)
-
         model = rbm.BernoulliRBM(args.n_visible, args.n_hidden, data_mean=init_mean)
         if args.use_dmala_trained_rbm:
             sd = get_dmala_trained_rbm_sd(args.data, args.n_hidden)
@@ -107,7 +107,7 @@ def main(args):
 
                 optimizer = torch.optim.Adam(model.parameters(), lr=args.rbm_lr)
 
-                xhat = model.init_dist.sample((args.n_test_samples,)).to(device)
+                # xhat = model.init_dist.sample((args.n_test_samples,)).to(device)
                 # train!
                 itr = 0
                 with tqdm.tqdm(total=args.rbm_train_iter) as pbar:
@@ -213,11 +213,15 @@ def main(args):
             sampler = samplers.MultiDiffSampler(
                 args.n_visible, 1, approx=True, temp=2.0, n_samples=n_hops
             )
-
+        elif "asb" in temp:
+            sampler = AnyscaleBalancedSampler(
+                args, cur_type="1st", sigma=0.1, alpha=0.5, adaptive=1
+            )
+            model_name = "anyscale"
         else:
             sampler = utils.get_dlp_samplers(temp, args.n_visible, device, args)
 
-        model_name = sampler.get_name()
+            model_name = sampler.get_name()
         cur_dir = f"{args.save_dir}/{args.data}/zeroinit_{args.zero_init}/rbm_iter_{args.rbm_train_iter}/{model_name}"
         if args.pair_optim:
             cur_dir += "_pair_opt"
@@ -247,45 +251,55 @@ def main(args):
             sampler.mh = orig_mh
 
         if args.burnin_adaptive:
-            # x, burnin_res = sampler.run_adaptive_burnin(
-            #     x.detach(),
-            #     model,
-            #     budget=args.burnin_budget,
-            #     test_steps=args.burnin_test_steps,
-            #     steps_obj="alpha_max",
-            #     lr=args.burnin_lr,
-            #     a_s_cut=args.burnin_a_s_cut,
-            # )
-            if args.adapt_strat == "greedy":
-                x, burnin_res = sampler.adapt_alg_greedy_mod(
+            if args.use_manual_EE:
+                burnin_res = sampler.adapt_SbC(
                     x.detach(),
                     model,
                     budget=args.burnin_budget,
                     test_steps=args.burnin_test_steps,
-                    init_big_step=30,  # TODO: make not hard coded
-                    init_small_step=0.01,
+                    init_big_step=30,
+                    init_small_step=0.05,
                     init_big_bal=0.95,
                     init_small_bal=0.5,
                     lr=args.burnin_lr,
                     a_s_cut=args.a_s_cut,
-                    bal_resolution=args.bal_resolution,
+                    use_dula=False,
                 )
             else:
-                x, burnin_res = sampler.adapt_bayes_gp(
-                    x.detach(),
-                    model,
-                    budget=args.burnin_budget,
-                    test_steps=args.burnin_test_steps,
-                    init_big_step=30,  # TODO: make not hard coded
-                    init_big_bal=0.95,
-                    init_small_bal=0.5,
-                    a_s_cut=args.a_s_cut,
-                    bal_resolution=args.bal_resolution,
-                )
-            with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
-                burnin_res["final_steps"] = sampler.step_sizes.cpu().numpy()
-                burnin_res["final_bal"] = sampler.balancing_constants
-                pickle.dump(burnin_res, f)
+                if "cyc" in temp:
+                    _, burnin_res = sampler.adapt_alg_greedy_mod(
+                        x.detach(),
+                        model,
+                        budget=args.burnin_budget,
+                        test_steps=args.burnin_test_steps,
+                        init_big_step=30,  # TODO: make not hard coded
+                        init_small_step=0.05,
+                        init_big_bal=0.95,
+                        init_small_bal=0.5,
+                        lr=args.burnin_lr,
+                        a_s_cut=args.a_s_cut,
+                        bal_resolution=args.bal_resolution,
+                        use_bal_cyc=False,
+                    )
+                else:
+                    burnin_res = sampler.adapt_big_step(
+                        x.detach(),
+                        model,
+                        budget=args.burnin_budget,
+                        test_steps=args.burnin_test_steps,
+                        lr=args.burnin_lr,
+                        init_big_step=30,
+                        init_bal=0.95,
+                        a_s_cut=args.a_s_cut,
+                        use_dula=not sampler.mh,
+                    )
+                    print(sampler.step_size)
+                    print(sampler.bal)
+            if "cyc" in temp:
+                with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
+                    burnin_res["final_steps"] = sampler.step_sizes.cpu().numpy()
+                    burnin_res["final_bal"] = sampler.balancing_constants
+                    pickle.dump(burnin_res, f)
 
         for i in tqdm.tqdm(range(args.n_steps), desc=f"{temp}"):
             # do sampling and time it
@@ -339,7 +353,7 @@ def main(args):
         print("ess = {} +/- {}".format(ess[temp].mean(), ess[temp].std()))
         # np.save("{}/rbm_sample_times_{}.npy".format(args.save_dir,temp),times[temp])
         # np.save("{}/rbm_sample_logmmd_{}.npy".format(args.save_dir,temp),log_mmds[temp])
-        if temp in ["cyc_dula", "cyc_dmala", "dula", "dmala"]:
+        if temp in ["cyc_dula", "cyc_dmala", "dula", "dmala", "asb"]:
             ess_data = {"ess_mean": ess_mean, "ess_std": ess_std}
             with open(f"{cur_dir}/log_mmds.pickle", "wb") as f:
                 pickle.dump(log_mmds[temp], f)
@@ -393,11 +407,11 @@ if __name__ == "__main__":
     parser.add_argument("--n_samples", type=int, default=500)
     parser.add_argument("--n_test_samples", type=int, default=100)
     parser.add_argument("--gt_steps", type=int, default=10000)
-    parser.add_argument("--seed", type=int, default=1123131)
+    parser.add_argument("--seed", type=int, default=1234567)
     parser.add_argument("--use_dmala_trained_rbm", action="store_true")
     # rbm def
-    parser.add_argument("--rbm_train_iter", type=int, default=10000)
-    parser.add_argument("--n_hidden", type=int, default=1000)
+    parser.add_argument("--rbm_train_iter", type=int, default=1000)
+    parser.add_argument("--n_hidden", type=int, default=500)
     parser.add_argument("--n_visible", type=int, default=784)
     parser.add_argument("--print_every", type=int, default=10)
     parser.add_argument("--viz_every", type=int, default=100)
@@ -405,6 +419,8 @@ if __name__ == "__main__":
     parser.add_argument("--rbm_lr", type=float, default=0.001)
     parser.add_argument("--cd", type=int, default=10)
     parser.add_argument("--img_size", type=int, default=28)
+    parser.add_argument("--scheduler_buffer_size", type=int, default=100)
+    parser.add_argument("--verbose", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=100)
     # for ess
     parser.add_argument("--subsample", type=int, default=1)
