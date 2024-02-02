@@ -1,33 +1,27 @@
 # Read Me 
 
-This is an in progress repository exploring the use of a cyclical step schedule for discrete langevin proposals.
+This is the supplementary material for the submission titled: 
 
-The following commands will run the experiments for various combinations of hyper-parameters
+"Gradient-based Discrete Sampling with Automatic Cyclical Scheduling"
 
-To set up directories, run setup.sh
+To run the experiments for rbm sampling, run the following bash scripts: 
 
-To generate the data, run 
+bash bash_scripts/rbm_sample_all_dmala.sh {CUDA ID GOES HERE}
+bash bash_scripts/rbm_mode_escape_all.sh {CUDA ID GOES HERE}
 
-bash generate_data.sh 
+To run the experiments for EBM sampling, run:
+bash bash_scripts/ebm_sample_all.sh {CUDA ID GOES HERE}
 
-To reproduce results for rbm sampling experiment, run the following: 
+To get the data for the step size and acceptance rate on EBMs with a fixed beta, run: 
+bash bash_scripts/ebm_stepsize_acceptance_curve.sh {CUDA ID GOES HERE}
 
-bash rbm_sample_ablation.sh
+To get the data for rbm learning, run the following: 
+bash bash_scripts/rbm_learn_all.sh {CUDA ID GOES HERE}
 
-To reproduce results for ising sample, run the following: 
+To generate Figure 1-5, run 
+python generate_figures_mainbody.py 
 
-bash ising_sample_ablation.sh
-
-To reproduce results for ising_learn_ablation, run the following: 
-
-bash ising_learn_ablation.sh
-
-To reproduce results for ebm experiments, run the following: 
-
-bash ebm.sh 
-
-bash ebm_cyc.sh
-
-Once these are finished running, you can generate all the relevant figures by running the following: 
-
-python generate_cdlp_plots.py
+THIS WILL NOT WORK IF YOU HAVE NOT GENERATED THE DATA. 
+To get the data for ebm learning, you must first run all the bash scripts in bash_scripts/ebm_scripts 
+To evaluate the models, you must run all the scripts in bash scripts/ais_scripts. 
+The ais results will be in the file labeled "log.txt" as well as printed on the screen.

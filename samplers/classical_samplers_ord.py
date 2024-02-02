@@ -53,37 +53,6 @@ class PerDimGibbsSamplerOrd(nn.Module):
         # only true if xhat was generated from self.step(x, model)
         return 0.0
 
-
-class RandWalkOrd(nn.Module):
-    def __init__(self, dim, max_val, rand=False):
-        super().__init__()
-        self.dim = dim
-        self.changes = torch.zeros((dim,))
-        self.change_rate = 0.0
-        self.p = nn.Parameter(torch.zeros((dim,)))
-        self._i = 0
-        self._ar = 0.0
-        self._hops = 0.0
-        self._phops = 1.0
-        self.rand = rand
-        self.max_val = max_val
-
-    def step(self, x, model):
-        sample = x.clone()
-        cat_dist = dists.categorical.Categorical(
-            torch.zeros((sample.size(0), self.dim, self.max_val)).to(sample.device)
-        )
-        new_coords = cat_dist.sample()
-
-        a = (la > torch.rand_like(la)).float()
-        x = new_coords * a[:, None] + x * (1.0 - a[:, None])
-        return x
-
-    def logp_accept(self, xhat, x, model):
-        # only true if xhat was generated from self.step(x, model)
-        return 0.0
-
-
 class PerDimMetropolisSamplerOrd(nn.Module):
     def __init__(self, dim, dist_to_test, max_val, rand=False):
         super().__init__()

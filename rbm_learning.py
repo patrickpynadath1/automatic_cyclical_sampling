@@ -6,7 +6,7 @@ import samplers
 import mmd
 import ais
 import os
-from samplers.adaptive_components import BayesOptimizer
+from samplers.tuning_components import BayesOptimizer
 import utils
 import tensorflow_probability as tfp
 import tqdm
@@ -14,11 +14,10 @@ import block_samplers
 import time
 from config_cmdline import (
     config_sampler_args,
-    config_adaptive_args,
-    config_SbC_args,
+    config_acs_args,
+    config_acs_pcd_args,
     potential_datasets,
 )
-from result_storing_utils import *
 import pickle
 import pandas as pd
 
@@ -64,9 +63,19 @@ def main(args):
 
     if args.sampler == "gb":
         model_name = f"GB_{args.cd}"
+    elif args.sampler == "gwg":
+        sampler = samplers.DiffSampler(
+            args.n_visible,
+            1,
+            fixed_proposal=False,
+            approx=True,
+            multi_hop=False,
+            temp=2.0,
+        )
+        model_name = "gwg"
     else:
         sampler = utils.get_dlp_samplers(args.sampler, args.n_visible, device, args)
-        model_name = sampler.get_name()
+        model_name = args.sampler
     cur_dir = f"{args.save_dir}/{args.data}/itr_{args.total_iterations}/{args.n_hidden}/{model_name}"
     os.makedirs(cur_dir, exist_ok=True)
 
@@ -106,7 +115,7 @@ def main(args):
     total_ais_res = []
     burnin_metrics = {"alpha_max": [], "alpha_min": []}
     with tqdm.tqdm(total=args.n_steps) as pbar:
-        init_alpha_max = 30
+        init_alpha_max = 5
         init_alpha_min = 0.05
         running_max = []
         running_min = []
@@ -138,17 +147,17 @@ def main(args):
                     if itr % args.print_every == 0:
                         pbar.set_description(desc_str, refresh=True)
                 else:
-                    orig_mh = sampler.mh
-                    if "cyc" in args.sampler:
+                    sampling_steps = args.sampling_steps
+                    if args.sampler =="acs":
+                        orig_mh = sampler.mh
                         cycle_num = itr // sampler.iter_per_cycle
-                    if args.use_manual_EE and itr % sampler.iter_per_cycle == 0:
-                        sampling_steps = args.big_step_sampling_steps
-                        sampler.mh = False
-                    else:
-                        sampling_steps = args.sampling_steps
-                        sampler.mh = orig_mh
+                        if itr % sampler.iter_per_cycle == 0:
+                            sampling_steps = args.big_step_sampling_steps
+                            sampler.mh = False
+                        else:
+                            sampling_steps = args.sampling_steps
+                            sampler.mh = orig_mh
 
-                    if args.use_manual_EE:
                         if (
                             itr % sampler.iter_per_cycle == 0
                             and cycle_num % args.adapt_every == 0
@@ -169,16 +178,11 @@ def main(args):
                                 model,
                                 budget=big_step_budget + 100,
                                 test_steps=args.burnin_test_steps,
-                                init_big_step=init_alpha_max,
+                                init_big_step=5,
                                 a_s_cut=args.a_s_cut,
                                 lr=args.burnin_lr,
-                                init_big_bal=0.95,
+                                init_big_bal=0.8,
                                 use_dula=True,
-                            )
-                            running_max.append(new_alpha_max)
-
-                            init_alpha_max = min(
-                                np.mean(running_max) + np.std(running_max), 30
                             )
                             burnin_metrics["alpha_max"].append(alpha_max_metrics)
                         elif itr % sampler.iter_per_cycle == 1:
@@ -210,13 +214,7 @@ def main(args):
                                     xhat.detach(), model, itr
                                 ).detach()
                     else:
-                        for i in range(sampling_steps):
-                            if args.sampler in ["cyc_dmala", "cyc_dula"]:
-                                xhat_new = sampler.step(
-                                    xhat.detach(), model, itr
-                                ).detach()
-                            else:
-                                xhat_new = sampler.step(xhat.detach(), model).detach()
+                        xhat_new = sampler.step(xhat.detach(), model).detach()
                         # compute the hops
                     cur_hops = (xhat_new != xhat).float().sum(-1).mean().item()
                     total_hops.append(cur_hops)
@@ -242,7 +240,7 @@ def main(args):
         bookkeeping["hops"] = total_hops
         if args.burnin_adaptive:
             bookkeeping["burnin_res"] = burnin_metrics
-        if args.sampler != "gb":
+        if args.sampler not in ["gb", "gwg"]:
             bookkeeping["a_s"] = sampler.a_s
 
     digit_energies = []
@@ -289,7 +287,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--eval_every", type=int, default=200)
-    parser.add_argument("--save_dir", type=str, default="./figs/rbm_learn")
+    parser.add_argument("--save_dir", type=str, default="raw_exp_data/rbm_learn")
     parser.add_argument("--data", choices=potential_datasets, type=str, default="mnist")
     parser.add_argument("--n_steps", type=int, default=2000)
     parser.add_argument("--n_samples", type=int, default=499)
@@ -317,16 +315,16 @@ if __name__ == "__main__":
     )
     parser.add_argument("--num_cycles", type=int, default=100)
     parser.add_argument("--step_size", type=float, default=2.0)
-    parser.add_argument("--sampler", type=str, default="cyc_dmala")
+    parser.add_argument("--sampler", type=str, default="acs")
     parser.add_argument("--initial_balancing_constant", type=float, default=1.0)
     parser.add_argument("--use_big", action="store_true")
     parser.add_argument("--num_seeds", type=int, default=1)
     parser.add_argument("--eval_sampling_steps", type=int, default=100000)
 
     # burnin hyper-param arguments
-    parser = config_adaptive_args(parser)
+    parser = config_acs_args(parser)
     # sbc hyper params
-    parser = config_SbC_args(parser)
+    parser = config_acs_pcd_args(parser)
     args = parser.parse_args()
     args.min_lr = None
     main(args)

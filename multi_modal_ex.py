@@ -1,4 +1,4 @@
-from config_cmdline import config_SbC_args, config_sampler_args, config_adaptive_args
+from config_cmdline import config_acs_pcd_args, config_sampler_args, config_acs_args
 import torch.nn as nn
 import pickle
 import torch
@@ -12,30 +12,15 @@ from torch.distributions import Binomial
 from torch import tensor
 from samplers import (
     LangevinSamplerOrdinal,
-    CyclicalLangevinSamplerOrdinal,
-    RandWalkOrd,
+    AutomaticCyclicalSamplerOrdinal,
     PerDimMetropolisSamplerOrd,
 )
 from tqdm import tqdm
 
-from asbs_code.GBS.sampling.globally import AnyscaleBalancedSampler
+from asbs_code.GBS.sampling.globally_ord import AnyscaleBalancedSamplerOrdinal
 
-# I dont know why, but this magically solves all numerical instability problems
+
 EPS = 1e-10
-
-# some hardcoded examples;
-
-
-DIM = 64
-mean1 = [10, 50]
-mean2 = [50, 50]
-mean3 = [10, 10]
-mean4 = [50, 10]
-center_mean = [32, 32]
-torch.cuda.manual_seed_all(0)
-torch.manual_seed(0)
-MULTIMODAL = torch.tensor([mean1, mean2, mean3, mean4])
-UNIMODAL = tensor([center_mean])
 
 
 def get_modes(num_modes, space_between_modes=5):
@@ -130,6 +115,7 @@ class MM_Heat(nn.Module):
         return torch.log(out + EPS)
 
 
+
 def calc_probs(ss_dim, energy_function, device):
     energy_function.one_hot = False
     samples = []
@@ -145,17 +131,16 @@ def calc_probs(ss_dim, energy_function, device):
 
 def run_sampler_burnin(sampler, energy_function, start_coord, device, args):
     x = torch.Tensor(start_coord).repeat(args.batch_size, 1).to(device)
-    # TODO: fix the burnin adaptive; make sure it works for thiis
-    _, burnin_res = sampler.adapt_alg_greedy_mod(
+    _, burnin_res = sampler.tuning_alg(
         x.detach(),
         energy_function,
         budget=args.burnin_budget,
         test_steps=1,
-        init_big_step=200,  # TODO: make not hard coded
-        init_small_step=2,
+        init_big_step=0.009,  # TODO: make not hard coded
+        init_small_step=0.001,
         init_big_bal=0.6,
         init_small_bal=0.5,
-        lr=args.burnin_lr,
+        lr=0.0001,
         a_s_cut=args.a_s_cut,
         bal_resolution=args.bal_resolution,
     )
@@ -214,12 +199,12 @@ def run_sampler(
 
 def get_sampler(args, dim, device):
     use_mh = "dmala" in args.sampler
-    if "cyc" in args.sampler:
-        sampler = CyclicalLangevinSamplerOrdinal(
+    if args.sampelr == "acs":
+        sampler = AutomaticCyclicalSamplerOrdinal(
             dim=int(2),
             max_val=dim,
             n_steps=1,
-            mh=use_mh,
+            mh=True,
             num_cycles=args.num_cycles,
             num_iters=args.sampling_steps,
             mean_stepsize=args.step_size,
@@ -235,13 +220,6 @@ def get_sampler(args, dim, device):
             min_lr=args.min_lr,
             device=device,
         )
-        if args.hand_tuned_sched:
-            step_sizes = torch.Tensor([150, 75, 75, 75, 75, 10, 10, 5]).to(device)
-            bal = torch.Tensor([0.5, 0.5, 0.5, 0.5, 0.5, 0.5]).to(device)
-            sampler.step_sizes = step_sizes
-            sampler.balancing_constants = bal
-            sampler.iter_per_cycle = len(step_sizes)
-
         print(sampler.step_sizes)
         print(sampler.balancing_constants)
     elif args.sampler == "dmala":
@@ -259,8 +237,13 @@ def get_sampler(args, dim, device):
     elif args.sampler == "rw":
         sampler = PerDimMetropolisSamplerOrd(dim=2, max_val=dim, dist_to_test=100)
     elif args.sampler == "asb":
-        sampler = AnyscaleBalancedSampler(
-            args, cur_type="1st", sigma=0.1, alpha=0.5, adaptive=1
+        sampler = AnyscaleBalancedSamplerOrdinal(
+            args,
+            cur_type="1st",
+            sigma=100,
+            alpha=0.5,
+            adaptive=1,
+            max_val=dim,
         )
     return sampler
 
@@ -271,22 +254,12 @@ def main(args):
     )
 
     dim, modes_to_use = get_modes(args.num_modes, args.space_between_modes)
-    # if args.modality == "unimodal":
-    #     modes_to_use = UNIMODAL
-    # else:
-    #     modes_to_use = MULTIMODAL
-    # dim = DIM
-    if args.dist_type == "heat":
-        energy_function = MM_Heat(
-            ss_dim=dim,
-            means=modes_to_use,
-            var=args.dist_var,
-            device=device,
-        )
-    elif args.dist_type == "bin":
-        energy_function = MM_Bin(ss_dim=DIM, means=modes_to_use, device=device)
-    else:
-        energy_function = None
+    energy_function = MM_Heat(
+        ss_dim=dim,
+        means=modes_to_use,
+        var=args.dist_var,
+        device=device,
+    )
     sampler = get_sampler(args, dim, device)
     cur_dir = f"{args.save_dir}/{args.dist_type}_{args.dist_var}/"
     cur_dir += f"{args.modality}_{args.starting_point}/"
@@ -308,15 +281,10 @@ def main(args):
     plt.imshow(dist_img, cmap="Blues")
 
     plt.axis("off")
-    plt.savefig(f"{cur_dir}/init_dist.svg")
-    plt.savefig(f"{cur_dir}/init_dist.png")
+    plt.savefig(f"{cur_dir}/init_dist.pdf", bbox_inches="tight")
+    plt.savefig(f"{cur_dir}/init_dist.png", bbox_inches="tight")
+    plt.savefig(f"{cur_dir}/init_dist.svg", bbox_inches="tight")
     print(f"gt: {cur_dir}/init_dist.png")
-    # if args.starting_point == "center":
-    #     start_coord = 32
-    # elif args.starting_point == "low_mode":
-    #     # TODO: for bin, make it start at the LOWEST mode
-    #     start_coord = 63
-    # else:
     start_coord_y = np.random.randint(0, dim)
     start_coord_x = np.random.randint(0, dim)
     # start_coord_x = start_coord_y = dim // 4
@@ -355,15 +323,16 @@ def main(args):
     pickle.dump(est_img, open(f"{cur_dir}/actual_probs.pickle", "wb"))
     plt.imshow(est_img, cmap="Blues")
     plt.axis("off")
-    plt.savefig(f"{cur_dir}/est_dist.png")
-    plt.savefig(f"{cur_dir}/est_dist.svg")
+    plt.savefig(f"{cur_dir}/est_dist.png", bbox_inches="tight")
+    plt.savefig(f"{cur_dir}/est_dist.pdf", bbox_inches="tight")
+    plt.savefig(f"{cur_dir}/est_dist.svg", bbox_inches="tight")
     print(f"est: {cur_dir}/est_dist.png")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dist_type", type=str, default="heat")
-    parser.add_argument("--save_dir", type=str, default="./figs/multi_modal")
+    parser.add_argument("--save_dir", type=str, default="/raw_exp_data/multi_modal")
     parser.add_argument("--cuda_id", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--sampling_steps", type=int, default=1000)
@@ -374,11 +343,10 @@ if __name__ == "__main__":
     parser.add_argument("--num_modes", type=int, default=5)
     parser.add_argument("--space_between_modes", type=int, default=50)
     parser.add_argument("--scheduler_buffer_size", type=int, default=100)
-    parser.add_argument("--verbose", type=int, default=0)
-    parser.add_argument("--hand_tuned_sched", action="store_true")
+    parser.add_argument("--verbose", type=int, default=2)
     parser = config_sampler_args(parser)
-    parser = config_adaptive_args(parser)
-    parser = config_SbC_args(parser)
+    parser = config_acs_args(parser)
+    parser = config_acs_pcd_args(parser)
     args = parser.parse_args()
     args.burn_in = 0
     args.n_steps = 1

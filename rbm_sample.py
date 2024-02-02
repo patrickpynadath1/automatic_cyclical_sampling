@@ -13,25 +13,19 @@ import tensorflow_probability as tfp
 import tqdm
 import block_samplers
 import time
-from result_storing_utils import *
 import pickle
 from config_cmdline import (
     config_sampler_args,
-    config_adaptive_args,
-    config_SbC_args,
+    config_acs_args,
+    config_acs_pcd_args,
     potential_datasets,
 )
 from asbs_code.GBS.sampling.globally import AnyscaleBalancedSampler
 
 
-def get_dmala_trained_rbm_sd(data, n_hidden):
-    fn = f"figs/rbm_learn/{data}/itr_10000/{n_hidden}/dmala_stepsize_0.2_0.5/rbm_sd.pt"
-    return torch.load(fn)
-
-
-def get_gb_trained_rbm_sd(data, train_iter, rbm_name):
+def get_gb_trained_rbm_sd(data, train_iter, rbm_name, save_dir):
     fn = (
-        f"figs/rbm_sample_res/{data}/zeroinit_False/rbm_iter_{train_iter}/{rbm_name}.pt"
+        f"{save_dir}/{data}/zeroinit_False/rbm_iter_{train_iter}/{rbm_name}.pt"
     )
     print(fn)
     if os.path.isfile(fn):
@@ -40,9 +34,6 @@ def get_gb_trained_rbm_sd(data, train_iter, rbm_name):
 
 
 def makedirs(dirname):
-    """
-    Make directory only if it's not already there.
-    """
     if not os.path.exists(dirname):
         os.makedirs(dirname)
 
@@ -62,92 +53,67 @@ def main(args):
     device = torch.device(
         "cuda:" + str(args.cuda_id) if torch.cuda.is_available() else "cpu"
     )
-    # seeds = utils.get_rand_seeds(args.seed_file)
-
-    # if args.num_seeds == 1:
-    #     seeds = [seeds[0]]
-    # else:
-    #     seeds = seeds[:min(len(seeds), args.num_seeds)]
     args.test_batch_size = args.batch_size
     args.train_batch_size = args.batch_size
     args.test_batch_size = args.batch_size
     np.random.seed(args.seed)
     torch.manual_seed(args.seed)
 
-    if args.data in potential_datasets:
-        assert args.n_visible == 784
-        args.img_size = 28
-        model = rbm.BernoulliRBM(args.n_visible, args.n_hidden)
+    assert args.n_visible == 784
+    args.img_size = 28
+    model = rbm.BernoulliRBM(args.n_visible, args.n_hidden)
+    model.to(device)
+    train_loader, test_loader, plot, viz = utils.get_data(args)
+
+    init_data = []
+    for x, _ in train_loader:
+        init_data.append(x)
+    init_data = torch.cat(init_data, 0)
+    init_mean = init_data.mean(0).clamp(0.01, 0.99)
+    model = rbm.BernoulliRBM(args.n_visible, args.n_hidden, data_mean=init_mean)
+    rbm_name = f"rbm_lr_{str(args.rbm_lr)}_n_hidden_{str(args.n_hidden)}"
+    sd = get_gb_trained_rbm_sd(args.data, args.rbm_train_iter, rbm_name, args.save_dir)
+    if sd is not None:
+        print("Model found; omitting unnecessary training")
+        model.load_state_dict(sd)
         model.to(device)
-        train_loader, test_loader, plot, viz = utils.get_data(args)
-
-        init_data = []
-        for x, _ in train_loader:
-            init_data.append(x)
-        init_data = torch.cat(init_data, 0)
-        init_mean = init_data.mean(0).clamp(0.01, 0.99)
-        model = rbm.BernoulliRBM(args.n_visible, args.n_hidden, data_mean=init_mean)
-        if args.use_dmala_trained_rbm:
-            sd = get_dmala_trained_rbm_sd(args.data, args.n_hidden)
-            model.load_state_dict(sd)
-            model.to(device)
-            args.rbm_train_iter = "pretrain"
-        else:
-            rbm_name = f"rbm_lr_{str(args.rbm_lr)}_n_hidden_{str(args.n_hidden)}"
-            sd = get_gb_trained_rbm_sd(args.data, args.rbm_train_iter, rbm_name)
-            if sd is not None:
-                print("Model found; omitting unnecessary training")
-                model.load_state_dict(sd)
-                model.to(device)
-            else:
-                print("No saved sd found, training rbm with gb")
-                save_dir = f"figs/rbm_sample_res/{args.data}/zeroinit_False/rbm_iter_{args.rbm_train_iter}/"
-                os.makedirs(save_dir, exist_ok=True)
-                model.to(device)
-
-                optimizer = torch.optim.Adam(model.parameters(), lr=args.rbm_lr)
-
-                # xhat = model.init_dist.sample((args.n_test_samples,)).to(device)
-                # train!
-                itr = 0
-                with tqdm.tqdm(total=args.rbm_train_iter) as pbar:
-                    while itr < args.rbm_train_iter:
-                        for x, _ in train_loader:
-                            x = x.to(device)
-                            xhat = model.gibbs_sample(v=x, n_steps=args.cd)
-
-                            d = model.logp_v_unnorm(x)
-                            m = model.logp_v_unnorm(xhat)
-
-                            obj = d - m
-                            loss = -obj.mean()
-
-                            optimizer.zero_grad()
-                            loss.backward()
-                            optimizer.step()
-
-                            desc_str = "{} | log p(data) = {:.4f}, log p(model) = {:.4f}, diff = {:.4f}".format(
-                                itr, d.mean(), m.mean(), (d - m).mean()
-                            )
-
-                            itr += 1
-
-                            pbar.update(1)
-                            if itr % args.print_every == 0:
-                                pbar.set_description(desc_str, refresh=True)
-
-                            # if itr % args.print_every == 0:
-                            #     print(
-                            #         "{} | log p(data) = {:.4f}, log p(model) = {:.4f}, diff = {:.4f}".format(
-                            #             itr, d.mean(), m.mean(), (d - m).mean()
-                            #         )
-                            #     )
-                    torch.save(model.state_dict(), save_dir + f"{rbm_name}.pt")
     else:
-        model.W.data = torch.randn_like(model.W.data) * (0.05**0.5)
-        model.b_v.data = torch.randn_like(model.b_v.data) * 1.0
-        model.b_h.data = torch.randn_like(model.b_h.data) * 1.0
-        viz = plot = None
+        print("No saved sd found, training rbm with gb")
+        save_dir = f"{args.save_dir}/{args.data}/zeroinit_False/rbm_iter_{args.rbm_train_iter}/"
+        os.makedirs(save_dir, exist_ok=True)
+        model.to(device)
+
+        optimizer = torch.optim.Adam(model.parameters(), lr=args.rbm_lr)
+
+        # xhat = model.init_dist.sample((args.n_test_samples,)).to(device)
+        # train!
+        itr = 0
+        with tqdm.tqdm(total=args.rbm_train_iter) as pbar:
+            while itr < args.rbm_train_iter:
+                for x, _ in train_loader:
+                    x = x.to(device)
+                    xhat = model.gibbs_sample(v=x, n_steps=args.cd)
+
+                    d = model.logp_v_unnorm(x)
+                    m = model.logp_v_unnorm(xhat)
+
+                    obj = d - m
+                    loss = -obj.mean()
+
+                    optimizer.zero_grad()
+                    loss.backward()
+                    optimizer.step()
+
+                    desc_str = "{} | log p(data) = {:.4f}, log p(model) = {:.4f}, diff = {:.4f}".format(
+                        itr, d.mean(), m.mean(), (d - m).mean()
+                    )
+
+                    itr += 1
+
+                    pbar.update(1)
+                    if itr % args.print_every == 0:
+                        pbar.set_description(desc_str, refresh=True)
+            torch.save(model.state_dict(), save_dir + f"{rbm_name}.pt")
 
     if args.get_base_energies:
         digit_energies = []
@@ -208,24 +174,22 @@ def main(args):
                 multi_hop=False,
                 temp=2.0,
             )
+            model_name = "gwg"
         elif "gwg-" in temp:
             n_hops = int(temp.split("-")[1])
             sampler = samplers.MultiDiffSampler(
                 args.n_visible, 1, approx=True, temp=2.0, n_samples=n_hops
             )
+            model_name = temp
         elif "asb" in temp:
             sampler = AnyscaleBalancedSampler(
                 args, cur_type="1st", sigma=0.1, alpha=0.5, adaptive=1
             )
-            model_name = "anyscale"
+            model_name = "asb"
         else:
             sampler = utils.get_dlp_samplers(temp, args.n_visible, device, args)
-
-            model_name = sampler.get_name()
+            sampler = temp
         cur_dir = f"{args.save_dir}/{args.data}/zeroinit_{args.zero_init}/rbm_iter_{args.rbm_train_iter}/{model_name}"
-        if args.pair_optim:
-            cur_dir += "_pair_opt"
-        cur_dir += f"_{args.adapt_strat}"
         os.makedirs(cur_dir, exist_ok=True)
         x = x0.clone().detach()
         sample_var[temp] = []
@@ -236,75 +200,32 @@ def main(args):
         chain = []
         cur_time = 0.0
         print_every_i = 0
-        if args.use_dula_init:
-            print("using dula initialization")
-            # only used for experiments with bDMALA and making
-            # step size acc curve
-            orig_sz = sampler.step_size
-            dula_init_sz = 30  # magic number, point is just to make all inits the same
-            sampler.step_size = dula_init_sz
-            orig_mh = sampler.mh
-            sampler.mh = False
-            for i in range(100):
-                x = sampler.step(x.detach(), model).detach()
-            sampler.step_size = orig_sz
-            sampler.mh = orig_mh
 
-        if args.burnin_adaptive:
-            if args.use_manual_EE:
-                burnin_res = sampler.adapt_SbC(
-                    x.detach(),
-                    model,
-                    budget=args.burnin_budget,
-                    test_steps=args.burnin_test_steps,
-                    init_big_step=30,
-                    init_small_step=0.05,
-                    init_big_bal=0.95,
-                    init_small_bal=0.5,
-                    lr=args.burnin_lr,
-                    a_s_cut=args.a_s_cut,
-                    use_dula=False,
-                )
-            else:
-                if "cyc" in temp:
-                    _, burnin_res = sampler.adapt_alg_greedy_mod(
-                        x.detach(),
-                        model,
-                        budget=args.burnin_budget,
-                        test_steps=args.burnin_test_steps,
-                        init_big_step=30,  # TODO: make not hard coded
-                        init_small_step=0.05,
-                        init_big_bal=0.95,
-                        init_small_bal=0.5,
-                        lr=args.burnin_lr,
-                        a_s_cut=args.a_s_cut,
-                        bal_resolution=args.bal_resolution,
-                        use_bal_cyc=False,
-                    )
-                else:
-                    burnin_res = sampler.adapt_big_step(
-                        x.detach(),
-                        model,
-                        budget=args.burnin_budget,
-                        test_steps=args.burnin_test_steps,
-                        lr=args.burnin_lr,
-                        init_big_step=30,
-                        init_bal=0.95,
-                        a_s_cut=args.a_s_cut,
-                        use_dula=not sampler.mh,
-                    )
-                    print(sampler.step_size)
-                    print(sampler.bal)
-            if "cyc" in temp:
-                with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
-                    burnin_res["final_steps"] = sampler.step_sizes.cpu().numpy()
-                    burnin_res["final_bal"] = sampler.balancing_constants
-                    pickle.dump(burnin_res, f)
+        if args.burnin_adaptive and temp == "acs":
 
+            _, burnin_res = sampler.tuning_alg(
+                x.detach(),
+                model,
+                budget=args.burnin_budget,
+                test_steps=args.burnin_test_steps,
+                init_big_step=5,
+                init_small_step=0.05,
+                init_big_bal=0.95,
+                init_small_bal=0.5,
+                lr=args.burnin_lr,
+                a_s_cut=args.a_s_cut,
+                bal_resolution=args.bal_resolution,
+                use_bal_cyc=False,
+            )
+
+            with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
+                burnin_res["final_steps"] = sampler.step_sizes.cpu().numpy()
+                burnin_res["final_bal"] = sampler.balancing_constants
+                pickle.dump(burnin_res, f)
         for i in tqdm.tqdm(range(args.n_steps), desc=f"{temp}"):
             # do sampling and time it
             st = time.time()
-            if temp in ["cyc_dula", "cyc_dmala"]:
+            if temp =="acs":
                 xhat = sampler.step(x.detach(), model, i).detach()
             else:
                 xhat = sampler.step(x.detach(), model).detach()
@@ -353,7 +274,7 @@ def main(args):
         print("ess = {} +/- {}".format(ess[temp].mean(), ess[temp].std()))
         # np.save("{}/rbm_sample_times_{}.npy".format(args.save_dir,temp),times[temp])
         # np.save("{}/rbm_sample_logmmd_{}.npy".format(args.save_dir,temp),log_mmds[temp])
-        if temp in ["cyc_dula", "cyc_dmala", "dula", "dmala", "asb"]:
+        if temp in ["cyc_dula", "cyc_dmala", "dula", "dmala", "asb", "gwg"]:
             ess_data = {"ess_mean": ess_mean, "ess_std": ess_std}
             with open(f"{cur_dir}/log_mmds.pickle", "wb") as f:
                 pickle.dump(log_mmds[temp], f)
@@ -372,14 +293,8 @@ def main(args):
             if args.get_base_energies:
                 with open(f"{cur_dir}/digit_energies.pickle", "wb") as f:
                     pickle.dump(digit_energy_res, f)
-            # store_sequential_data(cur_dir, model_name, "log_mmds", log_mmds[temp])
-            # store_sequential_data(cur_dir, model_name, "times", times[temp])
-            # write_ess_data(
-            #     cur_dir, model_name, {"ess_mean": ess_mean, "ess_std": ess_std}
-            # )
 
             if temp in ["dmala", "cyc_dmala"]:
-                # store_sequential_data(args.save_dir, model_name, "a_s", sampler.a_s)
                 with open(f"{cur_dir}/a_s.pickle", "wb") as f:
                     pickle.dump(sampler.a_s, f)
     plt.clf()
@@ -429,18 +344,17 @@ if __name__ == "__main__":
         "--ess_statistic", type=str, default="dims", choices=["hamming", "dims"]
     )
     parser.add_argument("--zero_init", action="store_true")
-    parser.add_argument("--samplers", type=str, nargs="*", default=["cyc_dula"])
+    parser.add_argument("--samplers", type=str, nargs="*", default=["acs"])
     # sampler params
     parser = config_sampler_args(parser)
 
     # adaptive hyper params
-    parser = config_adaptive_args(parser)
+    parser = config_acs_args(parser)
 
     # sbc hyper params
-    parser = config_SbC_args(parser)
+    parser = config_acs_pcd_args(parser)
     parser.add_argument("--get_base_energies", action="store_true")
     parser.add_argument("--cuda_id", type=int, default=0)
-    parser.add_argument("--use_dula_init", action="store_true")
     args = parser.parse_args()
 
     main(args)

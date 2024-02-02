@@ -33,8 +33,8 @@ def get_rand_seeds(file_name):
 
 def get_dlp_samplers(temp, dim, device, args):
     use_mh = "dmala" in temp
-    if "cyc" in temp:
-        sampler = samplers.CyclicalLangevinSampler(
+    if temp == "acs":
+        sampler = samplers.AutomaticCyclicalSampler(
             dim,
             n_steps=1,
             num_cycles=args.num_cycles,
@@ -44,13 +44,12 @@ def get_dlp_samplers(temp, dim, device, args):
             multi_hop=False,
             temp=1.0,
             mean_stepsize=args.step_size,
-            mh=use_mh,
+            mh=True,
             num_iters=args.n_steps,
             device=device,
             burnin_budget=args.burnin_budget,
             burnin_adaptive=args.burnin_adaptive,
             burnin_lr=args.burnin_lr,
-            adapt_alg=args.burnin_step_obj,
             sbc=args.use_manual_EE,
             big_step=args.big_step,
             big_bal=args.big_bal,
@@ -70,54 +69,11 @@ def get_dlp_samplers(temp, dim, device, args):
             temp=1.0,
             step_size=args.step_size,
             mh=use_mh,
-            use_big=args.use_big,
-            burn_in_budget=args.burnin_budget,
-            burn_in_adaptive=args.burnin_adaptive,
-            adapt_alg=args.step_obj,
         )
 
     else:
         raise ValueError("Invalid Sampler")
     return sampler
-
-
-# function for performing averaging across results for different seeds
-# structure for bookkeeping should be {seed : seed_res},
-# structure for seed_res should be {seed_res : temp_res}
-# structure for temp_res should be {metric_name : values}
-def seed_averaging(bookkeeping):
-    output = {}
-
-    for seed, seed_res in bookkeeping.items():
-        for temp, temp_res in seed_res.items():
-            if temp not in list(output.keys()):
-                output[temp] = {}
-            for metric, values in temp_res.items():
-                if metric not in list(output[temp].keys()):
-                    output[temp][metric] = [values]
-                else:
-                    output[temp][metric].append(values)
-
-    for temp, metric_list in output.items():
-        for metric, values in metric_list.items():
-            if metric != "ess_res" and "burnin" not in metric:
-                values = np.array(values)
-                output[temp][metric] = {
-                    "mean": values.mean(axis=0),
-                    "var": values.var(axis=0),
-                }
-            elif metric == "ess_res":
-                mean = np.array([v["ess_mean"] for v in values]).mean()
-                var_mean = np.array([v["ess_mean"] for v in values]).var()
-                mean_var = np.array([v["ess_std"] ** 0.5 for v in values]).mean()
-                output[temp][metric] = {
-                    "ess_mean": mean,
-                    "var_mean": var_mean,
-                    "mean_var": mean_var,
-                }
-            else:
-                output[temp][metric] = values
-    return output
 
 
 def approx_difference_function(x, model):
@@ -352,217 +308,3 @@ def load_synthetic(mat_file, batch_size):
         torch.tensor(ground_truth_h),
         torch.tensor(ground_truth_C),
     )
-
-
-def load_real_protein(args):
-    from data_utils import Alignment, load_distmap, MyDCA, map_matrix
-
-    a2m = {
-        "BPT1_BOVIN": f"{args.data_root}/BPT1_BOVIN/BPT1_BOVIN_full_b03.a2m",
-        "CADH1_HUMAN": f"{args.data_root}/CADH1_HUMAN/CADH1_HUMAN_full_b02.a2m",
-        "CHEY_ECOLI": f"{args.data_root}/CHEY_ECOLI/CHEY_ECOLI_full_b09.a2m",
-        "ELAV4_HUMAN": f"{args.data_root}/ELAV4_HUMAN/ELAV4_HUMAN_full_b02.a2m",
-        "O45418_CAEEL": f"{args.data_root}/O45418_CAEEL/O45418_CAEEL_full_b02.a2m",
-        "OMPR_ECOLI": f"{args.data_root}/OMPR_ECOLI/OMPR_ECOLI_full_b08.a2m",
-        "OPSD_BOVIN": f"{args.data_root}/OPSD_BOVIN/OPSD_BOVIN_full_b03.a2m",
-        "PCBP1_HUMAN": f"{args.data_root}/PCBP1_HUMAN/PCBP1_HUMAN_full_b01.a2m",
-        "RNH_ECOLI": f"{args.data_root}/RNH_ECOLI/RNH_ECOLI_full_b04.a2m",
-        "THIO_ALIAC": f"{args.data_root}/THIO_ALIAC/THIO_ALIAC_full_b09.a2m",
-        "TRY2_RAT": f"{args.data_root}/TRY2_RAT/TRY2_RAT_full_b02.a2m",
-    }[args.data]
-    print("Loading alignment...")
-    with open(a2m, "r") as infile:
-        aln = Alignment.from_file(infile, format="fasta")
-    print("Done")
-    print("Loading distmap(s)")
-    intra_file = {
-        "BPT1_BOVIN": f"{args.data_root}/BPT1_BOVIN/BPT1_BOVIN_full_b03_distance_map_monomer",
-        "CADH1_HUMAN": f"{args.data_root}/CADH1_HUMAN/CADH1_HUMAN_full_b02_distance_map_monomer",
-        "CHEY_ECOLI": f"{args.data_root}/CHEY_ECOLI/CHEY_ECOLI_full_b09_distance_map_monomer",
-        "ELAV4_HUMAN": f"{args.data_root}/ELAV4_HUMAN/ELAV4_HUMAN_full_b02_distance_map_monomer",
-        "O45418_CAEEL": f"{args.data_root}/O45418_CAEEL/O45418_CAEEL_full_b02_distance_map_monomer",
-        "OMPR_ECOLI": f"{args.data_root}/OMPR_ECOLI/OMPR_ECOLI_full_b08_distance_map_monomer",
-        "OPSD_BOVIN": f"{args.data_root}/OPSD_BOVIN/OPSD_BOVIN_full_b03_distance_map_monomer",
-        "PCBP1_HUMAN": f"{args.data_root}/PCBP1_HUMAN/PCBP1_HUMAN_full_b01_distance_map_monomer",
-        "RNH_ECOLI": f"{args.data_root}/RNH_ECOLI/RNH_ECOLI_full_b04_distance_map_monomer",
-        "THIO_ALIAC": f"{args.data_root}/THIO_ALIAC/THIO_ALIAC_full_b09_distance_map_monomer",
-        "TRY2_RAT": f"{args.data_root}/TRY2_RAT/TRY2_RAT_full_b02_distance_map_monomer",
-    }[args.data]
-    distmap_intra = load_distmap(intra_file)
-
-    multimer_file = {
-        "BPT1_BOVIN": f"{args.data_root}/BPT1_BOVIN/BPT1_BOVIN_full_b03_distance_map_multimer",
-        "CADH1_HUMAN": f"{args.data_root}/CADH1_HUMAN/CADH1_HUMAN_full_b02_distance_map_multimer",
-        "CHEY_ECOLI": f"{args.data_root}/CHEY_ECOLI/CHEY_ECOLI_full_b09_distance_map_multimer",
-        "ELAV4_HUMAN": f"{args.data_root}/ELAV4_HUMAN/ELAV4_HUMAN_full_b02_distance_map_multimer",
-        "O45418_CAEEL": f"{args.data_root}/O45418_CAEEL/O45418_CAEEL_full_b02_distance_map_multimer",
-        "OMPR_ECOLI": f"{args.data_root}/OMPR_ECOLI/OMPR_ECOLI_full_b08_distance_map_multimer",
-        "OPSD_BOVIN": None,
-        "PCBP1_HUMAN": f"{args.data_root}/PCBP1_HUMAN/PCBP1_HUMAN_full_b01_distance_map_multimer",
-        "RNH_ECOLI": f"{args.data_root}/RNH_ECOLI/RNH_ECOLI_full_b04_distance_map_multimer",
-        "THIO_ALIAC": f"{args.data_root}/THIO_ALIAC/THIO_ALIAC_full_b09_distance_map_multimer",
-        "TRY2_RAT": None,
-    }[args.data]
-    if multimer_file is None:
-        distmap_multimer = None
-    else:
-        distmap_multimer = load_distmap(multimer_file)
-
-    num_ecs = {
-        "BPT1_BOVIN": 57,
-        "CADH1_HUMAN": 324,
-        "CHEY_ECOLI": 114,
-        "ELAV4_HUMAN": 140,
-        "O45418_CAEEL": 234,
-        "OMPR_ECOLI": 220,
-        "OPSD_BOVIN": 266,
-        "PCBP1_HUMAN": 190,
-        "RNH_ECOLI": 133,
-        "THIO_ALIAC": 95,
-        "TRY2_RAT": 209,
-    }[args.data]
-    print("Done")
-    print("Pulling data")
-    L = aln.L
-    D = len(aln.alphabet)
-    print("Raw Data size {}".format((L, D)))
-
-    dca = MyDCA(aln)
-    # dca.alignment.set_weights()
-    # print(dca.alignment.weights.sum(), "MY DCA SUM")
-    L = dca.alignment.L
-    D = len(dca.alignment.alphabet)
-    x_int = torch.from_numpy(dca.int_matrix()).float()
-    x_oh = torch.nn.functional.one_hot(x_int.long(), D).float()
-    print("Filtered Data size {}".format((L, D)))
-
-    J = -distmap_intra.dist_matrix
-    J = J + args.contact_cutoff
-    J[J < 0] = 0.0
-    J[np.isnan(J)] = 0.0  # treat unobserved values as just having no contact
-    ind = np.diag_indices(J.shape[0])
-    J[ind] = 0.0
-    C = np.copy(J)
-    C[C > 0] = 1.0
-    C[C <= 0] = 0.0
-    print("Done")
-    print("J size = {}".format(J.shape))
-
-    weight_file = f"{args.data_root}/{args.data}/weights.pkl"
-    if not os.path.exists(weight_file):
-        print("Generating weights")
-        dca.alignment.set_weights()
-        weights = dca.alignment.weights
-        with open(weight_file, "wb") as f:
-            pickle.dump(weights, f)
-    else:
-        print("Loading weights")
-        with open(weight_file, "rb") as f:
-            weights = pickle.load(f)
-
-    weights = torch.tensor(weights).float()
-    print("Done")
-    print(
-        "Dataset has {} examples, sum weights are {}".format(
-            weights.size(0), weights.sum()
-        )
-    )
-    print("Scaling up by {}".format(float(weights.size(0)) / weights.sum()))
-    weights *= float(weights.size(0)) / weights.sum()
-    print("Distmap size {}".format(J.shape))
-
-    train_data = TensorDataset(x_oh, weights)
-    train_loader = DataLoader(train_data, args.batch_size, shuffle=True, drop_last=True)
-    test_loader = train_loader
-
-    # pull indices from distance map
-    # dm_indices = list(torch.tensor(np.array(distmap_intra.residues_j.id).astype(int) - 1).numpy())
-    dm_indices = list(
-        torch.tensor(np.array(distmap_intra.residues_j.id).astype(int)).numpy()
-    )
-    print(dm_indices)
-    dca_indices = dca.index_list
-    print(dca_indices)
-    int_indices = list(set(dm_indices).intersection(set(dca_indices)))
-    dm_int_indices = []
-    for i, ind in enumerate(dm_indices):
-        if ind in int_indices:
-            dm_int_indices.append(i)
-
-    dca_int_indices = []
-    for i, ind in enumerate(dca_indices):
-        if ind in int_indices:
-            dca_int_indices.append(i)
-
-    print(dm_int_indices)
-    print(dca_int_indices)
-
-    print(len(dm_int_indices))
-    print(len(dca_int_indices))
-
-    print("Removing indices from C and J")
-    print("Old size: {}".format(C.shape))
-    C = C[dm_int_indices][:, dm_int_indices]
-    J = J[dm_int_indices][:, dm_int_indices]
-    print("New size: {}".format(C.shape))
-    dca_int_indices = torch.tensor(dca_int_indices).long()
-    print(dca_int_indices)
-    return (
-        train_loader,
-        test_loader,
-        x_oh,
-        num_ecs,
-        torch.tensor(J),
-        torch.tensor(C),
-        dca_int_indices,
-    )
-
-
-def load_ingraham(args):
-    from data_utils import Alignment, map_matrix
-
-    with open("{}/PF00018.a2m".format(args.data_root), "r") as infile:
-        aln = Alignment.from_file(infile, format="fasta")
-
-    L = aln.L
-    D = len(aln.alphabet)
-    x_int = torch.from_numpy(map_matrix(aln.matrix, aln.alphabet_map))
-    n_out = D
-    x_oh = torch.nn.functional.one_hot(x_int.long(), n_out).float()
-
-    print(L, D, x_oh.size())
-
-    aln.set_weights()
-    weights = torch.tensor(aln.weights).float()
-    print(
-        "Dataset has {} examples, sum weights are {}".format(
-            weights.size(0), weights.sum()
-        )
-    )
-    print("Scaling up by {}".format(float(weights.size(0)) / weights.sum()))
-    weights *= float(weights.size(0)) / weights.sum()
-
-    with open("{}/PF00018_summary.txt".format(args.data_root), "r") as f:
-        lines = [line.strip().split("\t") for line in f.readlines()]
-        X = [int(line[0]) for line in lines]
-        Y = [int(line[1]) for line in lines]
-        M = [float(line[5]) for line in lines]
-        D = np.zeros((48, 48))
-        for x, y, m in zip(X, Y, M):
-            D[x - 1, y - 1] = m
-            J = -(D + D.T)
-            J = J + args.contact_cutoff
-            J[J < 0] = 0.0
-            ind = np.diag_indices(J.shape[0])
-            J[ind] = 0.0
-            C = np.copy(J)
-            C[C > 0] = 1.0
-            C[C <= 0] = 0.0
-
-    print("Distmap size {}".format(J.shape))
-
-    train_data = TensorDataset(x_oh, weights)
-    train_loader = DataLoader(train_data, args.batch_size, shuffle=True, drop_last=True)
-    test_loader = train_loader
-
-    return train_loader, test_loader, x_oh, 200, torch.tensor(J), torch.tensor(C)

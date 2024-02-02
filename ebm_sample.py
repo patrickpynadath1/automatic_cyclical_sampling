@@ -1,5 +1,4 @@
 import argparse
-from result_storing_utils import *
 import torch
 import numpy as np
 import vamp_utils
@@ -12,9 +11,10 @@ from pcd_ebm_ema import get_sampler, EBM
 import torchvision
 from rbm_sample import get_ess
 import mmd
-from config_cmdline import config_adaptive_args, config_sampler_args, config_SbC_args
+from config_cmdline import config_acs_args, config_sampler_args, config_acs_pcd_args
 import pickle
 import time
+import pandas as pd
 
 
 def sqrt(x):
@@ -67,14 +67,15 @@ def main(args):
         raise ValueError("invalid model definition")
 
     sampler = get_sampler(args)
-    if args.sampler in ["dmala", "dula", "cyc_dmala", "cyc_dula"]:
-        sampler_name = sampler.get_name()
+
+    sampler_name = args.sampler
+    if sampler_name == "asb":
+        # the A paper did not use adaptive for this task
+        sampler.adaptive = 0
+    if args.use_acs_ebm:
+        cur_dir = f"{args.save_dir}/{args.dataset_name}_acs_ebm/{sampler_name}"
     else:
-        sampler_name = args.sampler
-    if args.burnin_adaptive:
-        sampler_name += "_adapt_burnin"
-        sampler_name += f"_lr_{args.burnin_lr}"
-    cur_dir = f"{args.save_dir}/zeroinit_{args.zero_init}/{sampler_name}"
+        cur_dir = f"{args.save_dir}/{args.dataset_name}/{sampler_name}"
     os.makedirs(cur_dir, exist_ok=True)
 
     # copying the same initialization for the buffer as in pcd_ebm_ema
@@ -84,14 +85,21 @@ def main(args):
     init_batch = torch.cat(init_batch, 0)
     eps = 1e-2
     init_mean = init_batch.mean(0) * (1.0 - 2 * eps) + eps
+    init_var = init_batch.std(0) ** 2 * (1 - 4 * eps) + eps
     init_dist = torch.distributions.Bernoulli(probs=init_mean)
 
     if args.base_dist:
         model = EBM(net, init_mean)
     else:
         model = EBM(net)
-
-    d = torch.load(f"{args.ckpt_path}")
+    if args.use_acs_ebm:
+        ckpt_path = "figs/ebm/cs/caltech_0.7_30/best_ckpt_caltech_cyc_dmala_1.5.pt"
+    else:
+        ckpt_path = (
+            f"example_ebms/gwg_ebm_{args.dataset_name}.pt"
+        )
+    print(ckpt_path)
+    d = torch.load(ckpt_path)
     model.load_state_dict(d["ema_model"])
     model.L = 1
     x_init = init_dist.sample((args.samples_to_generate,)).to(device)
@@ -100,45 +108,14 @@ def main(args):
         x_init = torch.zeros_like(x_init).to(device)
     model = model.to(device)
 
-    # TODO:: make the ground truth DMALA, similar to GB in RBM sample
-    gt_sampler = LangevinSampler(
-        np.prod(args.input_size),
-        n_steps=1,
-        bal=0.5,
-        fixed_proposal=False,
-        approx=True,
-        multi_hop=False,
-        temp=1.0,
-        step_size=0.2,
-        mh=True,
-    )
-    for i in tqdm.tqdm(range(args.gt_sample_steps), desc="gt_chain"):
-        gt = gt_sampler.step(gt.detach(), model)
-
-    kmmd = mmd.MMD(mmd.exp_avg_hamming, False)
-    gt_samples, gt_samples2 = gt[: args.n_samples], gt[args.n_samples :]
-    cur_dir_pre = f"{args.save_dir}/{args.data}/zeroinit_{args.zero_init}"
-    if args.sampler in ["cyc_dmala", "dmala", "dula", "dmala"]:
-        model_name = sampler.get_name()
-    else:
-        model_name = args.sampler
-    cur_dir = f"{cur_dir_pre}/{model_name}"
-    os.makedirs(cur_dir_pre, exist_ok=True)
+    #     print(starting_batch.shape)
     os.makedirs(cur_dir, exist_ok=True)
-    if plot is not None:
-        plot("{}/ground_truth.png".format(cur_dir_pre), gt_samples2)
-    opt_stat = kmmd.compute_mmd(gt_samples2, gt_samples)
-    print("gt <--> gt log-mmd", opt_stat, opt_stat.log10())
-    pickle.dump(opt_stat.log10().cpu(), open(cur_dir_pre + "/gt_log_mmds.pt", "wb"))
-    if args.get_base_energies:
-        digit_energies = []
-        digit_values = []
-        for x, y in train_loader:
-            x = preprocess(x.to(device).requires_grad_())
-            d = model(x)
-            digit_energies += list(d.detach().cpu().numpy())
-            digit_values += list(y.cpu().numpy())
-        digit_energy_res = {"energies": digit_energies, "values": digit_values}
+    # if plot is not None:
+    #     plot("{}/ground_truth.png".format(cur_dir_pre), gt_samples2)
+    # opt_stat = kmmd.compute_mmd(gt_samples2, gt_samples)
+    # print("gt <--> gt log-mmd", opt_stat, opt_stat.log10())
+    # pickle.dump(opt_stat.log10().cpu(), open(cur_dir_pre + "/gt_log_mmds.pt", "wb"))
+
     # metrics to keep track of:
     energies = []
     hops = []
@@ -147,42 +124,38 @@ def main(args):
     times = []
     hops = []
     if args.burnin_adaptive:
-        _, burnin_res = sampler.adapt_alg_greedy_mod(
+        x_init, burnin_res = sampler.tuning_alg(
             x_init.detach(),
             model,
             budget=args.burnin_budget,
             test_steps=args.burnin_test_steps,
-            init_big_step=30,  # TODO: make not hard coded
+            init_big_step=5,
             init_small_step=0.05,
-            init_big_bal=0.95,
+            init_big_bal=0.6,
             init_small_bal=0.5,
             lr=args.burnin_lr,
-            a_s_cut=args.a_s_cut,
+            a_s_cut=.9,
             bal_resolution=args.bal_resolution,
             use_bal_cyc=False,
         )
 
         with open(f"{cur_dir}/burnin_res.pickle", "wb") as f:
             pickle.dump(burnin_res, f)
-    if "cyc" in args.sampler:
+    if args.sampler == "acs":
         print(f"steps: {sampler.step_sizes}")
         print(f"bal: {sampler.balancing_constants}")
     itr_per_cycle = args.sampling_steps // args.num_cycles
     interpolation_distances = list(np.linspace(0, 1, 10))
     interp_energies = [[] for _ in range(len(interpolation_distances))]
     to_interp = []
-
+    if args.sampler == "asb":
+        sampler.D = init_var.to(device) ** (-0.1) / 0.1
     cur_time = 0.0
     for itr in tqdm.tqdm(range(args.sampling_steps)):
         st = time.time()
-        if "cyc" in args.sampler:
+        if args.sampler == "acs":
             x_cur = sampler.step(x_init, model, itr)
         else:
-            if not args.initial_mh and itr < 100:
-                sampler.mh = False
-            else:
-                if args.sampler == "dmala":
-                    sampler.mh = True
             x_cur = sampler.step(x_init, model)
 
         cur_time += time.time() - st
@@ -190,9 +163,9 @@ def main(args):
         # calculate the hops
         if itr % args.print_every == 0:
             hard_samples = x_cur
-            stat = kmmd.compute_mmd(hard_samples, gt_samples)
-            log_stat = stat.log().item()
-            log_mmds.append(log_stat)
+            # stat = kmmd.compute_mmd(hard_samples, gt_samples)
+            # log_stat = stat.log().item()
+            # log_mmds.append(log_stat)
             times.append(cur_time)
 
         hops.append(cur_hops)
@@ -228,15 +201,10 @@ def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--save_dir", type=str, default="./figs/ebm_sample_zero")
+    parser.add_argument("--save_dir", type=str, default="raw_exp_data/ebm_sample")
     parser.add_argument("--n_samples", type=int, default=2)
     parser.add_argument("--n_test_samples", type=int, default=2)
     parser.add_argument("--seed_file", type=str, default="seed.txt")
-    parser.add_argument(
-        "--ckpt_path",
-        type=str,
-        default="figs/ebm/best_ckpt_dynamic_mnist_dmala_stepsize_0.2_0.5_0.2.pt",
-    )
     parser.add_argument("--ebm_model", type=str, default="resnet-64")
     # model def
 
@@ -270,14 +238,15 @@ if __name__ == "__main__":
     # may have an impact on burn in and acceptance rate
     parser.add_argument("--initial_mh", action="store_true")
     parser.add_argument("--zero_init", action="store_true")
-    parser.add_argument("--gt_sample_steps", type=int, default=100000)
+    parser.add_argument("--gt_sample_steps", type=int, default=10000)
 
     # adaptive arguments here
-    parser = config_adaptive_args(parser)
+    parser = config_acs_args(parser)
     parser = config_sampler_args(parser)
-    parser = config_SbC_args(parser)
+    parser = config_acs_pcd_args(parser)
     parser.add_argument("--data", type=str, default="mnist")
     parser.add_argument("--get_base_energies", action="store_true")
+    parser.add_argument("--use_acs_ebm", action="store_true")
     args = parser.parse_args()
     args.n_steps = args.sampling_steps
     main(args)

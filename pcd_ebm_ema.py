@@ -8,6 +8,7 @@ from samplers import (
     DiffSampler,
     PerDimMetropolisSampler,
     DiffSamplerMultiDim,
+    LangevinSampler,
 )
 import block_samplers
 import torch.nn as nn
@@ -19,8 +20,12 @@ import ais
 import copy
 import time
 import pickle
-from asbs_code.GBS.sampling.globally import AnyscaleBalancedSampler
-from config_cmdline import config_SbC_args, config_sampler_args, config_adaptive_args
+import sys
+from asbs_code.GBS.sampling.globally import (
+    AnyscaleBalancedSampler,
+    DiagAnyscaleBalancedSampler,
+)
+from config_cmdline import config_acs_args, config_sampler_args, config_acs_pcd_args
 
 
 def makedirs(dirname):
@@ -62,9 +67,10 @@ def get_sampler(args):
             )
 
         elif args.sampler == "asb":
-            sampler = AnyscaleBalancedSampler(
-                args, cur_type="1st", sigma=0.1, alpha=0.5, adaptive=1
-            )
+            sampler = DiagAnyscaleBalancedSampler(args, alpha=0.6)
+            # sampler = AnyscaleBalancedSampler(
+            #     args, cur_type="1st", sigma=0.1, alpha=0.5, adaptive=1
+            # )
             model_name = "anyscale"
         else:
             sampler = get_dlp_samplers(args.sampler, data_dim, args.device, args)
@@ -111,7 +117,7 @@ def main(args):
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
-    torch.cuda.manual_seed_all(args.seed)
+
     # load data
     train_loader, val_loader, test_loader, args = vamp_utils.load_dataset(args)
     plot = lambda p, x: torchvision.utils.save_image(
@@ -141,7 +147,6 @@ def main(args):
         raise ValueError("invalid model definition")
 
     # get data mean and initialize buffer
-
     init_batch = []
     for x, _ in train_loader:
         init_batch.append(preprocess(x))
@@ -175,7 +180,19 @@ def main(args):
     optimizer = torch.optim.Adam(
         model.parameters(), lr=args.lr, weight_decay=args.weight_decay
     )
+
     ema_model = copy.deepcopy(model)
+    eval_sampler = LangevinSampler(
+        np.prod(args.input_size),
+        n_steps=1,
+        bal=0.5,
+        fixed_proposal=False,
+        approx=True,
+        multi_hop=False,
+        temp=1.0,
+        step_size=0.2,
+        mh=True,
+    )
 
     if args.ckpt_path is not None:
         d = torch.load(args.ckpt_path)
@@ -187,22 +204,15 @@ def main(args):
     # move to cuda
     model.to(device)
     ema_model.to(device)
+
+    # get sampler
     sampler = get_sampler(args)
-    if args.sampler in ["dula", "dmala", "cyc_dula", "cyc_dmala"]:
-        sampler_name = sampler.get_name()
-    else:
-        sampler_name = args.sampler
-    cur_dir = f"{args.save_dir}/{args.dataset_name}/{sampler_name}"
-    os.makedirs(cur_dir, exist_ok=True)
+
     my_print(device)
     my_print(model)
     my_print(buffer.size())
     my_print(sampler)
-    if "cyc" in args.sampler:
-        my_print(sampler.step_sizes)
-        my_print(sampler.balancing_constants)
-        my_print(sampler.get_name())
-    print(sampler.step_size)
+
     itr = 0
     best_val_ll = -np.inf
     hop_dists = []
@@ -211,22 +221,10 @@ def main(args):
     init_dist = torch.distributions.Bernoulli(probs=init_mean.to(device))
     reinit_dist = torch.distributions.Bernoulli(probs=torch.tensor(args.reinit_freq))
     test_ll_list = []
-    orig_mh = True
-    init_alpha_max = 30
-    init_alpha_min = 0.05
-    running_max = []
-    running_min = []
-    burnin_metrics = {"alpha_max": [], "alpha_min": []}
+    alpha_max_metrics_running = []
+    alpha_min_metrics_running = []
     while itr < args.n_iters:
         for x in train_loader:
-            if "cyc" in args.sampler:
-                cycle_num = itr // sampler.iter_per_cycle
-            if args.use_manual_EE and itr % sampler.iter_per_cycle == 0:
-                sampling_steps = args.big_step_sampling_steps
-                sampler.mh = False
-            else:
-                sampling_steps = args.sampling_steps
-                sampler.mh = orig_mh
             if itr < args.warmup_iters:
                 lr = args.lr * float(itr) / args.warmup_iters
                 for param_group in optimizer.param_groups:
@@ -241,90 +239,81 @@ def main(args):
             x_buffer = buffer[buffer_inds].to(device)
             reinit = reinit_dist.sample((args.batch_size,)).to(device)
             x_reinit = init_dist.sample((args.batch_size,)).to(device)
-            xhat = x_reinit * reinit[:, None] + x_buffer * (1.0 - reinit[:, None])
+            x_fake = x_reinit * reinit[:, None] + x_buffer * (1.0 - reinit[:, None])
+
             hops = []  # keep track of how much the sampelr moves particles around
             st = time.time()
             sampling_steps = args.sampling_steps
-            cycle_num
             if args.use_manual_EE:
-                if (
-                    itr % sampler.iter_per_cycle == 0
-                    and cycle_num % args.adapt_every == 0
-                ):
-                    big_step_budget = (
-                        (args.sampling_steps - args.big_step_sampling_steps)
-                        * args.adapt_every
-                        * 2
-                    )
-                    # tune the big step
-                    # for right now, the initial alpha max = 30
-                    (
-                        xhat_new,
-                        new_alpha_max,
-                        alpha_max_metrics,
-                    ) = sampler.adapt_big_step(
-                        xhat.detach(),
-                        model,
-                        budget=big_step_budget + 100,
-                        test_steps=1,
-                        init_big_step=init_alpha_max,
-                        a_s_cut=args.a_s_cut,
-                        lr=args.burnin_lr,
-                        init_big_bal=0.9,
-                        use_dula=True,
-                    )
-                    running_max.append(new_alpha_max)
-
-                    init_alpha_max = min(np.mean(running_max) + np.std(running_max), 30)
-                    burnin_metrics["alpha_max"].append(alpha_max_metrics)
-                elif itr % sampler.iter_per_cycle == 1:
-                    # tune the small step
-                    (
-                        xhat_new,
-                        new_alpha_min,
-                        alpha_min_metrics,
-                    ) = sampler.adapt_small_step(
-                        xhat.detach(),
-                        model,
-                        budget=args.sampling_steps,
-                        test_steps=args.burnin_test_steps,
-                        init_small_step=init_alpha_min,
-                        a_s_cut=args.a_s_cut,
-                        lr=args.burnin_lr,
-                        init_small_bal=0.5,
-                        use_dula=False,
-                    )
-                    running_min.append(new_alpha_min)
-                    init_alpha_min = np.mean(running_min)
-                    init_alpha_min = max(
-                        0.05, np.mean(running_min) - np.std(running_min)
-                    )
-                    print(init_alpha_min)
-                    burnin_metrics["alpha_min"].append(alpha_min_metrics)
-                else:
-                    for i in range(sampling_steps):
-                        xhat_new = sampler.step(xhat.detach(), model, itr).detach()
-            else:
-                for i in range(sampling_steps):
-                    if args.sampler in ["cyc_dmala", "cyc_dula"]:
-                        xhat_new = sampler.step(xhat.detach(), model, itr).detach()
+                cycle_num = itr // args.steps_per_cycle
+                step_num = itr % args.steps_per_cycle
+                if args.burnin_adaptive:
+                    if (
+                        args.use_manual_EE
+                        and step_num == 0
+                        and cycle_num % args.adapt_every == 0
+                    ):
+                        (
+                            x_fake,
+                            alpha_max,
+                            alpha_max_metrics,
+                        ) = sampler.adapt_big_step(
+                            x_init=x_fake.detach(),
+                            model=model,
+                            budget=args.burnin_budget,
+                            init_big_step=5,
+                            init_big_bal=0.8,
+                            lr=args.burnin_lr,
+                            test_steps=1,
+                            a_s_cut=args.a_s_cut,
+                            use_dula=True,
+                            bdmala=None,
+                        )
+                        alpha_max_metrics_running.append(alpha_max_metrics)
+                        print(alpha_max)
+                    elif (
+                        args.use_manual_EE
+                        and step_num == 1
+                        and cycle_num % args.adapt_every == 0
+                    ):
+                        (
+                            x_fake,
+                            alpha_min,
+                            alpha_min_metrics,
+                        ) = sampler.adapt_small_step(
+                            x_init=x_fake,
+                            model=model,
+                            budget=args.burnin_budget,
+                            init_small_step=0.05,
+                            init_small_bal=0.5,
+                            lr=args.burnin_lr,
+                            test_steps=1,
+                            a_s_cut=args.a_s_cut,
+                            use_dula=False,
+                            bdmala=None,
+                        )
+                        alpha_min_metrics_running.append(alpha_min_metrics)
+                        print(alpha_min)
                     else:
-                        xhat_new = sampler.step(xhat.detach(), model).detach()
-            h = (
-                (xhat_new != xhat)
-                .float()
-                .view(xhat_new.size(0), -1)
-                .sum(-1)
-                .mean()
-                .item()
-            )
-            hops.append(h)
-            xhat = xhat_new
+                        if step_num == 0:
+                            sampler.mh = False
+                            sampling_steps = args.big_step_sampling_steps
+                        else:
+                            sampler.mh = True
+                            sampling_steps = args.sampling_steps
+
+                        for k in range(sampling_steps):
+                            x_fake_new = sampler.step(x_fake.detach(), model, itr).detach()
+                            x_fake = x_fake_new
+            else:
+                for k in range(args.sampling_steps):
+                    x_fake_new = sampler.step(x_fake.detach(), model).detach()
+                    x_fake = x_fake_new
             st = time.time() - st
             hop_dists.append(np.mean(hops))
 
             # update buffer
-            buffer[buffer_inds] = xhat.detach().cpu()
+            buffer[buffer_inds] = x_fake.detach().cpu()
 
             logp_real = model(x).squeeze()
             if args.p_control > 0:
@@ -337,13 +326,13 @@ def main(args):
             else:
                 grad_reg = 0.0
 
-            logp_fake = model(xhat).squeeze()
+            logp_fake = model(x_fake).squeeze()
 
             obj = logp_real.mean() - logp_fake.mean()
             loss = (
                 -obj
                 + grad_reg
-                + args.l2 * ((logp_real**2.0).mean() + (logp_fake**2.0).mean())
+                + args.l2 * ((logp_real**2.).mean() + (logp_fake**2.).mean())
             )
 
             optimizer.zero_grad()
@@ -355,50 +344,23 @@ def main(args):
                 ema_p.data = ema_p.data * args.ema + p.data * (1.0 - args.ema)
 
             if itr % args.print_every == 0:
-                if args.sampler != "asb":
-                    my_print(
-                        "({}) | ({}/iter) cur lr = {:.4f} |log p(real) = {:.4f}, "
-                        "log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}, a_s = {:.4f}".format(
-                            itr,
-                            st,
-                            lr,
-                            logp_real.mean().item(),
-                            logp_fake.mean().item(),
-                            obj.item(),
-                            hop_dists[-1],
-                            np.mean(sampler.a_s[-10:]),
-                        )
+                my_print(
+                    "({}) | ({}/iter) cur lr = {:.4f} |log p(real) = {:.4f}, "
+                    "log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}".format(
+                        itr,
+                        st,
+                        lr,
+                        logp_real.mean().item(),
+                        logp_fake.mean().item(),
+                        obj.item(),
+                        hop_dists[-1],
                     )
-                else:
-                    my_print(
-                        "({}) | ({}/iter) cur lr = {:.4f} |log p(real) = {:.4f}, "
-                        "log p(fake) = {:.4f}, diff = {:.4f}, hops = {:.4f}".format(
-                            itr,
-                            st,
-                            lr,
-                            logp_real.mean().item(),
-                            logp_fake.mean().item(),
-                            obj.item(),
-                            hop_dists[-1],
-                        )
-                    )
-
+                )
             if itr % args.viz_every == 0:
                 plot("{}/data_{}.png".format(args.save_dir, itr), x.detach().cpu())
-                plot("{}/buffer_{}.png".format(args.save_dir, itr), xhat.detach().cpu())
+                plot("{}/buffer_{}.png".format(args.save_dir, itr), x_fake)
 
             if (itr + 1) % args.eval_every == 0:
-                # changed so that the sampler used to evaluate the model is the SAME regardless
-                # of the sampler used to train the model
-                data_dim = np.prod(args.input_size)
-                eval_sampler = samplers.DiffSampler(
-                    data_dim,
-                    1,
-                    fixed_proposal=False,
-                    approx=True,
-                    multi_hop=False,
-                    temp=2.0,
-                )
                 logZ, train_ll, val_ll, test_ll, ais_samples = ais.evaluate(
                     ema_model,
                     init_dist,
@@ -410,7 +372,6 @@ def main(args):
                     device,
                     args.eval_sampling_steps,
                     args.test_batch_size,
-                    is_cyclical=False,
                 )
                 my_print(
                     "EMA Train log-likelihood ({}): {}".format(itr, train_ll.item())
@@ -420,8 +381,8 @@ def main(args):
                 test_ll_list.append(test_ll.item())
                 for _i, _x in enumerate(ais_samples):
                     plot(
-                        "{}/EMA_sample_{}_{}_{}_{}.png".format(
-                            cur_dir,
+                        "{}/EMA_sample_{}_{}_{}_{}_{}.png".format(
+                            args.save_dir,
                             args.dataset_name,
                             args.sampler,
                             args.step_size,
@@ -437,44 +398,20 @@ def main(args):
                 d["ema_model"] = ema_model.state_dict()
                 d["buffer"] = buffer
                 d["optimizer"] = optimizer.state_dict()
-                # TODO: refactor this
                 if val_ll.item() > 0:
                     exit()
                 if val_ll.item() > best_val_ll:
                     best_val_ll = val_ll.item()
                     my_print("Best valid likelihood")
-                    if args.sampler in ["cyc_dula", "cyc_dmala", "dula", "dmala"]:
-                        if args.use_manual_EE:
-                            sampler_name = f"{args.sampler}_{args.big_step}_{args.small_step}_{args.sampling_steps}_{args.steps_per_cycle}"
-                        else:
-                            sampler_name = sampler.get_name()
-                        if args.sampler in ["dmala", "cyc_dmala"]:
-                            pickle.dump(
-                                sampler.a_s,
-                                open(
-                                    f"{args.save_dir}/{sampler_name}_a_s.pickle", "wb"
-                                ),
-                            )
-                        torch.save(
-                            d,
-                            "{}/best_ckpt_{}_{}_{}.pt".format(
-                                args.save_dir,
-                                args.dataset_name,
-                                sampler_name,
-                                args.step_size,
-                            ),
-                        )
-                    else:
-                        torch.save(
-                            d,
-                            "{}/best_ckpt_{}_{}_{}.pt".format(
-                                args.save_dir,
-                                args.dataset_name,
-                                args.sampler,
-                                args.step_size,
-                            ),
-                        )
-
+                    torch.save(
+                        d,
+                        "{}/best_ckpt_{}_{}_{}.pt".format(
+                            args.save_dir,
+                            args.dataset_name,
+                            args.sampler,
+                            args.step_size,
+                        ),
+                    )
                 else:
                     torch.save(
                         d,
@@ -495,6 +432,15 @@ def main(args):
         ),
         test_ll_list,
     )
+    if args.burnin_adaptive:
+        pickle.dump(
+            alpha_max_metrics_running,
+            open(f"{args.save_dir}/alpha_max_metrics.pickle", "wb"),
+        )
+        pickle.dump(
+            alpha_min_metrics_running,
+            open(f"{args.save_dir}/alpha_min_metrics.pickle", "wb"),
+        )
 
 
 if __name__ == "__main__":
@@ -532,9 +478,9 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--cuda_id", type=int, default=0)
-    parser = config_adaptive_args(parser)
+    parser = config_acs_pcd_args(parser)
     # sbc hyper params
-    parser = config_SbC_args(parser)
+    parser = config_acs_args(parser)
     parser = config_sampler_args(parser)
     args = parser.parse_args()
     args.num_cycles = args.n_iters // args.steps_per_cycle

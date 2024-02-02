@@ -34,7 +34,7 @@ class LangevinSamplerOrdinal(nn.Module):
         self.bal = bal
         self.mh = mh
         self.max_val = max_val  ### number of classes in each dimension
-        self.step_size = (step_size * self.max_val) * (self.dim**2)
+        self.step_size = (step_size * self.max_val) ** (self.dim**2)
         # self.step_size = step_size
 
     def get_grad(self, x, model):
@@ -87,7 +87,10 @@ class LangevinSamplerOrdinal(nn.Module):
                 la = m_term + lp_reverse - lp_forward
                 a = (la.exp() > torch.rand_like(la)).float()
                 self.a_s.append(a.mean().item())
-                x_cur = x_delta * a[:, None] + x_cur * (1.0 - a[:, None])
+                if use_dula:
+                    x_cur = x_delta
+                else:
+                    x_cur = x_delta * a[:, None] + x_cur * (1.0 - a[:, None])
             else:
                 x_cur = x_delta
             x_cur = x_cur.long()
