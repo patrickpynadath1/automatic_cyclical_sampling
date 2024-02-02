@@ -2,74 +2,10 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="ae37d384-92d3-4c58-af14-413e6a697ae3" name="Changes" comment="added helpful scripts, easier visualization file and better readme">
-      <change afterPath="$PROJECT_DIR$/bash_scripts/rbm_learn_all.sh" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/bash_scripts/rbm_mode_escape_all.sh" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/bash_scripts/rbm_sample_all.sh" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/config_cmdline.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/ebm_sample_a_s_exp.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/example_dmala_dynamic_mnist_ebm.pt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/example_ebms/gwg_ebm_caltech.pt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/example_ebms/gwg_ebm_dynamic_mnist.pt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/example_ebms/gwg_ebm_omniglot.pt" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/example_ebms/gwg_ebm_static_mnist.pt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/bash_scripts/ebm_sample_all.sh" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/bash_scripts/get_multi_modal_res.sh" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.vimspector.json" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/BinaryBNN/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/bash_scripts/ebm_stepsize_acceptance_curve.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/CategoricalExample/README.md" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/CategoricalExample/sample_categorical_distribution.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/CategoricalExample/samplers.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/EBM Sample.ipynb" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/adaptive_alg_run.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/adaptive_rbm.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/ebm.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/ebm_cyc.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/ebm_manual_EE.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/ebm_step_size_acceptance.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/generate_data.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/ising_learn_ablation.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/ising_learn_adaptive.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/ising_sample_ablation.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/rbm_sample_ablation.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/rbm_sample_acc.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/rbm_sample_all_dmala.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/rbm_sample_all_dula.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/setup.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/step_size_acc_ising.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/step_size_acceptance.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/bash_scripts/train_all_rbm.sh" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/data_utils.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ebm_sample.py" beforeDir="false" afterPath="$PROJECT_DIR$/ebm_sample.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/eval_ais.py" beforeDir="false" afterPath="$PROJECT_DIR$/eval_ais.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/generate_cdlp_plots.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/ising_sample.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/multi_modal_ex.py" beforeDir="false" afterPath="$PROJECT_DIR$/multi_modal_ex.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/.ipynb_checkpoints/Adaptive cDLP Investigation-checkpoint.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/.ipynb_checkpoints/bDLP Analysis-checkpoint.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/Adaptive cDLP Investigation.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/CycDmala Acc Rate Inv.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/Experimental Results (SO FAR).ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/Ising Learn.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/RBM Learn.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/notebooks/bDLP Analysis.ipynb" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/pcd.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/pcd_ebm_ema.py" beforeDir="false" afterPath="$PROJECT_DIR$/pcd_ebm_ema.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/plt_pcd.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rbm.py" beforeDir="false" afterPath="$PROJECT_DIR$/rbm.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/rbm_a_s_exp/emnist/avg_a_s.pickle" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rbm_a_s_exp/mnist/avg_a_s.pickle" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/rbm_learning.py" beforeDir="false" afterPath="$PROJECT_DIR$/rbm_learning.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/rbm_multi_modal.py" beforeDir="false" afterPath="$PROJECT_DIR$/rbm_mode_escape.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/rbm_sample.py" beforeDir="false" afterPath="$PROJECT_DIR$/rbm_sample.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/result_storing_utils.py" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/samplers/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/samplers/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/samplers/adaptive_components.py" beforeDir="false" afterPath="$PROJECT_DIR$/samplers/tuning_components.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/samplers/cdlp_samplers.py" beforeDir="false" afterPath="$PROJECT_DIR$/samplers/acs_samplers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/samplers/classical_samplers_ord.py" beforeDir="false" afterPath="$PROJECT_DIR$/samplers/classical_samplers_ord.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/samplers/dlp_samplers.py" beforeDir="false" afterPath="$PROJECT_DIR$/samplers/dlp_samplers.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/samplers/ordinal_cyc_dlp.py" beforeDir="false" afterPath="$PROJECT_DIR$/samplers/ordinal_acs.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/samplers/ordinal_dlp.py" beforeDir="false" afterPath="$PROJECT_DIR$/samplers/ordinal_dlp.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -237,7 +173,7 @@
       <workItem from="1706833597908" duration="1145000" />
       <workItem from="1706835253636" duration="179000" />
       <workItem from="1706836212500" duration="434000" />
-      <workItem from="1706840440644" duration="599000" />
+      <workItem from="1706840440644" duration="754000" />
     </task>
     <task id="LOCAL-00001" summary="working codebase">
       <created>1689688044587</created>
@@ -267,7 +203,14 @@
       <option name="project" value="LOCAL" />
       <updated>1696543870151</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="added helpful scripts, easier visualization file and better readme">
+      <created>1706873763964</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1706873763964</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
