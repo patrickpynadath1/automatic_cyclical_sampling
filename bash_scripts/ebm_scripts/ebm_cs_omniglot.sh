@@ -1,0 +1,26 @@
+#!/bin/bash
+python pcd_ebm_ema.py \
+    --dataset_name omniglot \
+    --sampler acs\
+    --sampling_steps 10 \
+    --viz_every 100 \
+    --model resnet-64 \
+    --print_every 10 \
+    --lr .0001 \
+    --warmup_iters 10000 \
+    --burnin_adaptive \
+    --buffer_size 10000 \
+    --n_iters 50000 \
+    --buffer_init mean \
+    --base_dist \
+    --reinit_freq 0.0 \
+    --eval_every 5000 \
+    --eval_sampling_steps 10000 \
+    --use_manual_EE \
+    --steps_per_cycle 50 \
+    --big_step_sampling_steps 5 \
+    --big_step .5 \
+    --small_step .2 \
+    --save_dir figs/ebm/acs/omniglot \
+    --adapt_every 25 \
+    --cuda_id $1

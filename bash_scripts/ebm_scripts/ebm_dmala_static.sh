@@ -1,0 +1,21 @@
+#!/bin/bash
+python pcd_ebm_ema.py \
+    --dataset_name static_mnist \
+    --sampler dmala\
+    --step_size .15 \
+    --initial_balancing_constant .5\
+    --sampling_steps 10 \
+    --viz_every 100 \
+    --model resnet-64 \
+    --print_every 10 \
+    --lr .0001 \
+    --warmup_iters 10000 \
+    --buffer_size 10000 \
+    --n_iters 50000 \
+    --buffer_init mean \
+    --base_dist \
+    --reinit_freq 0.0 \
+    --eval_every 5000 \
+    --eval_sampling_steps 10000 \
+    --save_dir raw_exp_data/ebm/dmala_0.15_ss10/static_mnist \
+    --cuda_id $1;
