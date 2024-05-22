@@ -3,13 +3,16 @@ import numpy as np
 import bayes_opt
 
 
-def eval_bdmala(model, bdmala, x_init, test_steps, use_dula):
+def eval_bdmala(model, bdmala, x_init, test_steps, use_dula, return_dict_key = None):
     hops = []
     x_cur = x_init
     bdmala.a_s = []
     for _ in range(test_steps):
-        x_new = bdmala.step(x_cur.detach(), model, use_dula=use_dula)
-        cur_hops = (x_new != x_cur).float().sum(-1).mean().item()
+        x_new = bdmala.step(x_cur, model, use_dula=use_dula)
+        if return_dict_key is not None: 
+            cur_hops = ((x_new[return_dict_key] != x_cur[return_dict_key]) * 1.0).sum(-1).mean().item()
+        else: 
+            cur_hops = ((x_new != x_cur) * 1.0).sum(-1).mean().item()
         hops.append(cur_hops)
         x_cur = x_new
     a_s = np.mean(bdmala.a_s)
@@ -27,7 +30,7 @@ def update_hyperparam_metrics(best_idx, *lists):
 # helper function for adaptive functions
 # essentially, tests all the hyper-parameters of interest
 def run_hyperparameters(
-    model, bdmala, x_init, test_steps, param_update_func, param_list, use_dula
+    model, bdmala, x_init, test_steps, param_update_func, param_list, use_dula, return_dict_key = None
 ):
     a_s = []
     hops = []
@@ -35,7 +38,7 @@ def run_hyperparameters(
     for p in param_list:
         param_update_func(bdmala, p)
         cur_a_s, cur_hops, x_cur = eval_bdmala(
-            model, bdmala, x_init, test_steps, use_dula
+            model, bdmala, x_init, test_steps, use_dula, return_dict_key = return_dict_key
         )
         a_s.append(cur_a_s)
         hops.append(cur_hops)
@@ -160,10 +163,11 @@ def estimate_alpha_max(
     lr=0.5,
     test_steps=10,
     init_bal=0.95,
-    est_resolution=4,
+    est_resolution=1,
     error_margin=0.01,
     use_dula=False,
     step_update=None,
+    return_dict_key = None 
 ):
     a_s = 0
     cur_step = init_step_size
@@ -181,8 +185,8 @@ def estimate_alpha_max(
 
     while itr < budget:
         proposal_step = cur_step * (1 - lr * np.abs(a_s - a_s_cut))
-        # steps_to_test = [proposal_step, cur_step]
-        steps_to_test = np.linspace(proposal_step, cur_step, est_resolution)
+        steps_to_test = [proposal_step, cur_step]
+        # steps_to_test = np.linspace(proposal_step, cur_step, est_resolution)
         a_s_l, hops_l, x_potential_l = run_hyperparameters(
             model,
             bdmala,
@@ -191,6 +195,7 @@ def estimate_alpha_max(
             step_update,
             steps_to_test,
             use_dula=use_dula,
+            return_dict_key=return_dict_key
         )
         cur_step, a_s, hops, x_cur = update_hyperparam_metrics(
             np.argmax(a_s_l), steps_to_test, a_s_l, hops_l, x_potential_l
@@ -199,9 +204,11 @@ def estimate_alpha_max(
         hist_a_s.append(a_s)
         hist_alpha_max.append(cur_step)
         hist_hops.append(hops)
+        if a_s > a_s_cut - error_margin:
+            break
         # modified to see if this improves performance and avoids the case where it just continually decreases and gets smaller, worsening acceptance rate
-    eval_a_s_l = [np.abs(a_s - a_s_cut) for a_s in hist_a_s]
-    step_idx = np.argmin(eval_a_s_l)
+    eval_a_s_l = [a_s - a_s_cut for a_s in hist_a_s]
+    step_idx = np.argmax(eval_a_s_l)
     final_step_size = hist_alpha_max[step_idx]
     # final_step_size = cur_step
     hist_metrics = {
@@ -227,6 +234,7 @@ def estimate_alpha_min(
     est_resolution=4,
     use_dula=False,
     step_update=None,
+    return_dict_key=None
 ):
     a_s = 0
     cur_step = init_step_size
@@ -254,6 +262,7 @@ def estimate_alpha_min(
             step_update,
             steps_to_test,
             use_dula=use_dula,
+            return_dict_key=return_dict_key
         )
         eval_a_s_l = [np.abs(a - a_s_cut) for a in a_s_l]
         # we want the smallest_step size possible
@@ -264,8 +273,7 @@ def estimate_alpha_min(
         hist_alpha_min.append(cur_step)
         hist_hops.append(hops)
         itr += len(steps_to_test) * test_steps
-        if np.abs(a_s - a_s_cut) < error_margin:
-            break
+
     eval_a_s_l = [np.abs(a_s - a_s_cut) for a_s in hist_a_s]
     step_idx = np.argmin(eval_a_s_l)
     final_step_size = hist_alpha_min[step_idx]
@@ -334,6 +342,8 @@ def estimate_opt_bal(
     init_bal=0.95,
     est_resolution=3,
     use_dula=False,
+    init_small_bal=.5,
+    return_dict_key=None,
 ):
     # we will calculate in REVERSE order
     if type(opt_steps) == list:
@@ -344,7 +354,7 @@ def estimate_opt_bal(
     hist_a_s = []
     hist_hops = []
     x_cur = x_init
-    bal_proposals = [0.5, 0.55, 0.6]
+    bal_proposals = [init_small_bal, init_small_bal + .05, init_small_bal + .1]
 
     def update_bal(sampler, beta):
         sampler.bal = beta
@@ -359,6 +369,7 @@ def estimate_opt_bal(
             update_bal,
             bal_proposals,
             use_dula=use_dula,
+            return_dict_key=return_dict_key
         )
         best_bal, a_s, hops, x_cur = update_hyperparam_metrics(
             np.argmax(a_s_l), bal_proposals, a_s_l, hops_l, x_potential_l

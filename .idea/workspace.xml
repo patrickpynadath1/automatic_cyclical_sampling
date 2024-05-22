@@ -1,12 +1,7 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="ae37d384-92d3-4c58-af14-413e6a697ae3" name="Changes" comment="added helpful scripts, easier visualization file and better readme">
-      <change afterPath="$PROJECT_DIR$/bash_scripts/ebm_sample_all.sh" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/bash_scripts/get_multi_modal_res.sh" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/README.md" beforeDir="false" afterPath="$PROJECT_DIR$/README.md" afterDir="false" />
-    </list>
+    <list default="true" id="ae37d384-92d3-4c58-af14-413e6a697ae3" name="Changes" comment="" />
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
     <option name="HIGHLIGHT_NON_ACTIVE_CHANGELIST" value="false" />
@@ -173,7 +168,7 @@
       <workItem from="1706833597908" duration="1145000" />
       <workItem from="1706835253636" duration="179000" />
       <workItem from="1706836212500" duration="434000" />
-      <workItem from="1706840440644" duration="754000" />
+      <workItem from="1706840440644" duration="1374000" />
     </task>
     <task id="LOCAL-00001" summary="working codebase">
       <created>1689688044587</created>
@@ -210,7 +205,14 @@
       <option name="project" value="LOCAL" />
       <updated>1706873763964</updated>
     </task>
-    <option name="localTasksCounter" value="6" />
+    <task id="LOCAL-00006" summary="added helpful scripts, easier visualization file and better readme">
+      <created>1706873950164</created>
+      <option name="number" value="00006" />
+      <option name="presentableId" value="LOCAL-00006" />
+      <option name="project" value="LOCAL" />
+      <updated>1706873950164</updated>
+    </task>
+    <option name="localTasksCounter" value="7" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">

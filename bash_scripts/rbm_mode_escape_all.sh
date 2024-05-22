@@ -4,9 +4,9 @@ a_s=.5;
 seed=1234567;
 save_dir=raw_exp_data/rbm_sample;
 lr=.5;
-sample_steps=5000;
+sample_steps=10000;
 rbm_train_iter=1000;
-for data in mnist kmnist emnist
+for data in mnist kmnist emnist omniglot caltech
 do
   python rbm_mode_escape.py \
     --sampler asb \
@@ -39,7 +39,6 @@ do
 
   python rbm_mode_escape.py \
     --sampler acs \
-    --burnin_adaptive \
     --burnin_budget $budget \
     --data $data \
     --cuda_id $1  \
@@ -47,10 +46,7 @@ do
     --n_hidden 500  \
     --bal_resolution 10 \
     --rbm_train_iter $rbm_train_iter  \
-    --adapt_strat greedy \
     --num_cycles 250\
-    --pair_optim \
-    --burnin_test_steps 1 \
     --burnin_lr $lr \
     --n_steps $sample_steps \
     --seed $seed  \

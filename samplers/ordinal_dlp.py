@@ -54,7 +54,7 @@ class LangevinSamplerOrdinal(nn.Module):
         grad_expanded = grad[:, :, None].repeat((1, 1, self.max_val)).to(x_cur.device)
         term1 = self.bal * grad_expanded * (disc_values - x_expanded)
         term2 = (disc_values - x_expanded) ** 2 * (1 / (2 * self.step_size))
-        return self.bal * term1 - term2
+        return term1 - term2
 
     def step(self, x, model, use_dula=False):
         """

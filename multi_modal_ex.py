@@ -1,4 +1,4 @@
-from config_cmdline import config_acs_pcd_args, config_sampler_args, config_acs_args
+from config_cmdline import config_acs_pcd_args, config_acs_args
 import torch.nn as nn
 import pickle
 import torch
@@ -171,6 +171,11 @@ def run_sampler(
     pg = tqdm(range(sampling_steps))
     restart_every = sampling_steps // rand_restarts
     for i in pg:
+        if args.exponential_anneal:
+            step_size = .4923*(i + 647.24)**(-.55)
+            print(step_size)
+            sampler.step_size = (step_size * sampler.max_val) ** (sampler.dim**2)
+            print(sampler.step_size)
         x = x.to(device)
         energy_function = energy_function.to(device)
         if is_cyc:
@@ -192,6 +197,8 @@ def run_sampler(
                 pg.set_description(
                     f"mean a_s: {np.mean(chain_a_s[-100:])}, step_size: {sampler.step_size}"
                 )
+            # min_lr_val = (args.min_lr * dim)** (4) 
+            # sampler.step_size = max(min_lr_val, sampler.step_size * args.exponential_decay)
         # if i % restart_every == 0:
         #     x = torch.randint(0, dim, (1, 2)).repeat((batch_size, 1)).to(device)
     return chain_a_s, samples
@@ -199,7 +206,7 @@ def run_sampler(
 
 def get_sampler(args, dim, device):
     use_mh = "dmala" in args.sampler
-    if args.sampelr == "acs":
+    if args.sampler == "acs":
         sampler = AutomaticCyclicalSamplerOrdinal(
             dim=int(2),
             max_val=dim,
@@ -263,8 +270,8 @@ def main(args):
     sampler = get_sampler(args, dim, device)
     cur_dir = f"{args.save_dir}/{args.dist_type}_{args.dist_var}/"
     cur_dir += f"{args.modality}_{args.starting_point}/"
-    if "cyc" in args.sampler:
-        cur_dir += f"{sampler.get_name()}/"
+    if "acs" in args.sampler:
+        cur_dir += f"{sampler.get_name()}_{args.num_cycles}/"
     elif args.sampler == "dmala" or args.sampler == "dula":
         cur_dir += f"{args.sampler}_{args.initial_balancing_constant}_{args.step_size}/"
     else:
@@ -290,15 +297,15 @@ def main(args):
     # start_coord_x = start_coord_y = dim // 4
     start_coord = (start_coord_x, start_coord_y)
     est_img = torch.zeros((dim, dim))
-    if args.burnin_adaptive:
-        burnin_res = run_sampler_burnin(
-            sampler=sampler,
-            device=device,
-            start_coord=start_coord,
-            energy_function=energy_function,
-            args=args,
-        )
-        pickle.dump(burnin_res, open(f"{cur_dir}/burnin_res.pickle", "wb"))
+    # if args.burnin_adaptive:
+    #     burnin_res = run_sampler_burnin(
+    #         sampler=sampler,
+    #         device=device,
+    #         start_coord=start_coord,
+    #         energy_function=energy_function,
+    #         args=args,
+    #     )
+    #     pickle.dump(burnin_res, open(f"{cur_dir}/burnin_res.pickle", "wb"))
     x_init = None
     if args.sampler in ["gibbs", "asb", "dula", "cyc_dula", "rw"]:
         show_a_s = False
@@ -311,7 +318,7 @@ def main(args):
         device=device,
         sampler=sampler,
         start_coord=start_coord,
-        is_cyc="cyc" in args.sampler,
+        is_cyc=args.sampler=='acs',
         x_init=x_init,
         show_a_s=show_a_s,
         dim=dim,
@@ -332,7 +339,7 @@ def main(args):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--dist_type", type=str, default="heat")
-    parser.add_argument("--save_dir", type=str, default="/raw_exp_data/multi_modal")
+    parser.add_argument("--save_dir", type=str, default="figs/multi_modal")
     parser.add_argument("--cuda_id", type=int, default=0)
     parser.add_argument("--batch_size", type=int, default=128)
     parser.add_argument("--sampling_steps", type=int, default=1000)
@@ -344,7 +351,11 @@ if __name__ == "__main__":
     parser.add_argument("--space_between_modes", type=int, default=50)
     parser.add_argument("--scheduler_buffer_size", type=int, default=100)
     parser.add_argument("--verbose", type=int, default=2)
-    parser = config_sampler_args(parser)
+    parser.add_argument("--step_size", default=.011, type=float)
+    parser.add_argument("--min_lr", default=.011, type=float)
+    parser.add_argument("--burnin_adaptive", action="store_true")
+    parser.add_argument("--exponential_decay", default=.95, type=float)
+    parser.add_argument("--exponential_anneal", action="store_true")
     parser = config_acs_args(parser)
     parser = config_acs_pcd_args(parser)
     args = parser.parse_args()

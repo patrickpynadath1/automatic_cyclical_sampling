@@ -117,6 +117,18 @@ class AutomaticCyclicalSamplerOrdinal(nn.Module):
         if self.min_lr:
             name += "_min_lr"
         return name
+    
+    def calc_balancing_constants(self, init_bal):
+        res = []
+        total_iter = self.iter_per_cycle
+        for k_iter in range(total_iter):
+            inner = (np.pi * k_iter) / total_iter
+            cur_balancing_constant = (init_bal - 0.5) / 2 * (np.cos(inner)) + (
+                init_bal + 0.5
+            ) / 2
+            res.append(cur_balancing_constant)
+        res = torch.tensor(res, device=self.device)
+        return res
 
     def min_lr_cutoff(self):
         actual_val = torch.Tensor([self.min_lr * self.max_val]).to(self.device) ** (
@@ -158,6 +170,24 @@ class AutomaticCyclicalSamplerOrdinal(nn.Module):
         term2 = (disc_values - x_expanded) ** 2 * (1 / (2 * step_size))
         return term1 - term2
 
+    # def _calc_logits(self, x_cur, grad, step_size, bal):
+    #     # creating the tensor of discrete values to compute the probabilities for
+    #     batch_size = x_cur.shape[0]
+    #     disc_values = torch.arange(start=1, end=self.max_val, step=1)
+    #     # disc_values = torch.tensor([i for i in range(self.max_val)]).to(self.device)
+    #     # first term of term 1 = nabla(theta) * theta'
+    #     term1_1 = torch.einsum('bd, v -> bdv',  [grad, disc_values])
+    #     term1_2 = torch.einsum('bd, bd -> bd', [grad, x_cur])
+    #     term1 = term1_1 - term1_2[:, :, None]
+        
+    #     # term 2, expanded via foil
+    #     term2_1 = disc_values ** 2
+    #     term2_2 = torch.einsum('bd, v -> bdv', [x_cur, disc_values])
+    #     term2_3 = x_cur ** 2
+        
+    #     term2 = term2_1[None, None, :] - 2 * term2_2 + term2_3[:, :, None]
+    #     return term1 * bal - term2 * (1 / (2 * step_size))
+    
     def step(self, x, model, k_iter):
         x_cur = x
 

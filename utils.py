@@ -38,7 +38,7 @@ def get_dlp_samplers(temp, dim, device, args):
             dim,
             n_steps=1,
             num_cycles=args.num_cycles,
-            initial_balancing_constant=args.initial_balancing_constant,
+            initial_balancing_constant=1.0,
             fixed_proposal=False,
             approx=True,
             multi_hop=False,
@@ -47,18 +47,10 @@ def get_dlp_samplers(temp, dim, device, args):
             mh=True,
             num_iters=args.n_steps,
             device=device,
-            burnin_budget=args.burnin_budget,
-            burnin_adaptive=args.burnin_adaptive,
-            burnin_lr=args.burnin_lr,
-            sbc=args.use_manual_EE,
-            big_step=args.big_step,
-            big_bal=args.big_bal,
-            small_step=args.small_step,
-            small_bal=args.small_bal,
-            a_s_cut=args.a_s_cut,
-            min_lr=args.min_lr,
+            burnin_adaptive=True,
         )
     elif temp in ["dmala", "dula"]:
+        print(temp)
         sampler = samplers.LangevinSampler(
             dim,
             n_steps=1,
@@ -69,6 +61,19 @@ def get_dlp_samplers(temp, dim, device, args):
             temp=1.0,
             step_size=args.step_size,
             mh=use_mh,
+        )
+
+    elif temp in ["mid"]: 
+        sampler = samplers.MidLangevinSampler(
+            dim,
+            n_steps=1,
+            bal=args.initial_balancing_constant,
+            fixed_proposal=False,
+            approx=True,
+            multi_hop=False,
+            temp=1.0,
+            step_size=args.step_size,
+            mh=False,
         )
 
     else:

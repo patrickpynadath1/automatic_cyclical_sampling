@@ -6,33 +6,34 @@ lr=.5;
 save_dir=raw_exp_data/rbm_sample;
 sample_steps=1;
 rbm_train_iter=1000;
-for data in mnist kmnist emnist omniglot caltech
+n_steps=10000;
+n_hidden=500;
+for data in emnist 
 do
   python rbm_sample.py \
     --sampler asb \
     --data $data \
     --cuda_id $1 \
-    --n_hidden 500 \
+    --n_hidden $n_hidden\
     --rbm_train_iter $rbm_train_iter \
-    --n_steps 5000 \
+    --n_steps $n_steps \
     --save_dir $save_dir;
 
   python rbm_sample.py \
     --sampler gwg \
     --data $data \
     --cuda_id $1 \
-    --n_hidden 500 \
+    --n_hidden $n_hidden\
     --rbm_train_iter $rbm_train_iter \
-    --n_steps 5000 \
+    --n_steps $n_steps \
     --save_dir $save_dir ;
 
    python rbm_sample.py \
      --sampler dmala \
      --data $data \
      --cuda_id $1  \
-     --n_hidden 500 \
-     --rbm_train_iter 1000  \
-     --n_steps 5000 \
+     --n_hidden $n_hidden\
+     --n_steps $n_steps  \
      --initial_balancing_constant .5 \
      --rbm_train_iter $rbm_train_iter \
      --step_size .2 \
@@ -40,7 +41,6 @@ do
 
   python rbm_sample.py \
     --sampler acs \
-    --burnin_adaptive \
     --burnin_budget $budget \
     --data $data \
     --cuda_id $1  \
@@ -48,13 +48,9 @@ do
     --n_hidden 500  \
     --bal_resolution 10 \
     --rbm_train_iter 1000  \
-    --adapt_strat greedy \
-    --num_cycles 250\
-    --pair_optim \
-    --burnin_test_steps 1 \
+    --num_cycles $n_hidden \
     --burnin_lr $lr \
-    --n_steps 5000 \
-    --seed $seed  \
+    --n_steps $n_steps  \
     --rbm_train_iter $rbm_train_iter\
     --save_dir $save_dir;
 done

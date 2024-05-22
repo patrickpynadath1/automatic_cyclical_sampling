@@ -2,7 +2,7 @@ import argparse
 import torch
 import numpy as np
 import os
-from config_cmdline import config_acs_args, config_sampler_args, config_acs_pcd_args
+from config_cmdline import config_acs_args, config_acs_pcd_args
 import torchvision
 import vamp_utils
 import mlp
@@ -173,9 +173,8 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.001)
     parser.add_argument("--weight_decay", type=float, default=0.0)
     parser.add_argument("--cuda_id", type=int, default=0)
-
+    parser.add_argument("--step_size", type=float, default=.15)
     parser = config_acs_args(parser)
-    parser = config_sampler_args(parser)
     parser = config_acs_pcd_args(parser)
     args = parser.parse_args()
     print("sampler", args.eval_sampler, "lr", args.eval_step_size)

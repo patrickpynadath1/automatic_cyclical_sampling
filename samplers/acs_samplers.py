@@ -32,6 +32,7 @@ class AutomaticCyclicalSampler(nn.Module):
         iter_per_cycle=None,
         min_lr=None,
         a_s_cut=None,
+        **kwargs
     ):
         super().__init__()
         self.device = device
@@ -62,18 +63,18 @@ class AutomaticCyclicalSampler(nn.Module):
         self.hops = []
         self.initial_balancing_constant = initial_balancing_constant
         self.balancing_constant = initial_balancing_constant
+        self.bal = initial_balancing_constant
         if iter_per_cycle and sbc:
             self.iter_per_cycle = iter_per_cycle
         else:
             print(self.num_iters)
             print(self.num_cycles)
             self.iter_per_cycle = math.ceil(self.num_iters / self.num_cycles)
-        self.step_sizes = self.calc_stepsizes(mean_stepsize)
+        self.step_sizes = self.calc_stepsizes(self.step_size)
         self.diff_values = []
         self.flip_probs = []
-        self.balancing_constants = self.calc_balancing_constants(
-            self.initial_balancing_constant
-        )
+        self.D = None
+        self.balancing_constants = self.calc_balancing_constants(self.initial_balancing_constant)
         if sbc and big_step and big_bal and small_step and small_bal:
             self.sbc = sbc
             self.big_step = big_step
@@ -91,6 +92,10 @@ class AutomaticCyclicalSampler(nn.Module):
         if self.min_lr:
             self.min_lr_cutoff()
         self.a_s_cut = a_s_cut
+        self.track_terms = False 
+        self.t1 = None 
+        self.t2 = None
+        self.counts = 0
 
     def get_name(self):
         if self.mh:
@@ -257,7 +262,10 @@ class AutomaticCyclicalSampler(nn.Module):
         x_init_to_use="bal",
         bal_resolution=3,
         use_bal_cyc=False,
+        dula_burnin=50,
+        acs_burnin=0
     ):
+        
         bdmala = LangevinSampler(
             dim=self.dim,
             n_steps=self.n_steps,
@@ -269,17 +277,28 @@ class AutomaticCyclicalSampler(nn.Module):
             bal=init_small_bal,
         )
         # pre burn in
+        # if self.norm_mterm: 
+        #     bdmala.norm_mterm = self.norm_mterm 
+
+        bdmala.D = self.D
         bdmala.mh = False
-        bdmala.step_size = init_big_step
+        bdmala.step_size = 5
         bdmala.bal = init_big_bal
         bal_x_init = dula_x_init
-        for i in range(50):
-            dula_x_init = bdmala.step(dula_x_init, model).detach()
+        for i in range(dula_burnin):
+           dula_x_init = bdmala.step(dula_x_init, model).detach()
         bdmala.mh = True
+        self.mh = True
+        for i in range(acs_burnin): 
+            dula_x_init = self.step(dula_x_init, model, i).detach()
         total_res = {}
         possible_x_inits = [dula_x_init]
         # estimating alpha min
         use_dula = not self.mh
+        if bdmala.t1 is not None: 
+            t1 = bdmala.t1 / bdmala.counts 
+            t1 = t1.mean(axis=0)
+            D = torch.diag(t1)
         alpha_min_x_init, alpha_min, alpha_min_metrics, itr = estimate_alpha_min(
             model=model,
             bdmala=bdmala,
@@ -323,6 +342,7 @@ class AutomaticCyclicalSampler(nn.Module):
             est_resolution=bal_resolution,
             test_steps=test_steps,
             use_dula=use_dula,
+            init_small_bal = init_small_bal
         )
         possible_x_inits.append(bal_x_init)
 
@@ -352,8 +372,17 @@ class AutomaticCyclicalSampler(nn.Module):
 
         for i in range(self.n_steps):
             forward_delta = self.diff_fn(x_cur, model)
-            forward_delta_bal = forward_delta * balancing_constant
-            term2 = 1.0 / (2 * step_size)  # for binary {0,1}, the L2 norm is always 1
+            forward_delta_bal = forward_delta * balancing_constant 
+            if self.D is not None: 
+                term2 = self.D * (1.0 / (2 * step_size))
+            else: 
+                term2 = 1.0 / (2 * step_size)  # for binary {0,1}, the L2 norm is always 1
+            if self.track_terms:
+                if self.t1 is None:
+                    self.t1 = forward_delta_bal
+                else: 
+                    self.t1 += forward_delta_bal 
+                self.counts += 1
             flip_prob = torch.exp(
                 forward_delta_bal - term2
             ) / (
@@ -375,7 +404,7 @@ class AutomaticCyclicalSampler(nn.Module):
                 )
                 probs = flip_prob * ind + (1 - flip_prob) * (1.0 - ind)
                 lp_reverse = torch.sum(torch.log(probs + EPS), dim=-1)
-                m_term = model(x_delta).squeeze() - model(x_cur).squeeze()
+                m_term = model(x_delta).squeeze() - model(x_cur).squeeze() 
                 la = m_term + lp_reverse - lp_forward
                 a = (la.exp() > torch.rand_like(la)).float()
                 x_cur = x_delta * a[:, None] + x_cur * (1.0 - a[:, None])
@@ -387,6 +416,6 @@ class AutomaticCyclicalSampler(nn.Module):
                 x_cur = x_delta
         if return_diff:
             probs = torch.minimum(torch.ones_like(la, device=la.device), la.exp())
-            return x_cur, forward_delta, probs
+            return x_cur.detach(), forward_delta, probs
         else:
-            return x_cur
+            return x_cur.detach()

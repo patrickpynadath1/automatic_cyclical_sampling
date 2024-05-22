@@ -12,7 +12,7 @@ from pcd_ebm_ema import get_sampler, EBM
 import torchvision
 from rbm_sample import get_ess
 import mmd
-from config_cmdline import config_acs_args, config_sampler_args, config_acs_pcd_args
+from config_cmdline import config_acs_args, config_acs_pcd_args
 import pickle
 import time
 import pandas as pd
