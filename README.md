@@ -8,31 +8,33 @@
 This is the codebase for the 2024 NeurIPS paper "Gradient-based Discrete Sampling with Automatic Cyclical Scheduling". In this code-base, we discuss the problem of multi-modal distributions within the context of gradient-based discrete samplers and propose a novel sampling algorithm, Automatic Cyclical Sampling (ACS), to avoid this pitfall. Below we show various samplers estimate of a highly multi-modal distribution to illustrate this point. 
 <div style="display: flex; justify-content: space-around;">
   <figure style="margin: 10px;">
-    <img src="assets/init_dist.png" alt="Ground Truth Distribution" style="max-width: 100%;">
+    <img src="assets/init_dist.png" alt="Ground Truth Distribution" style="max-width: 25%;">
     <figcaption>Random Walk Estimate</figcaption>
   </figure>
   <figure style="margin: 10px;">
-    <img src="assets/rw_est.png" alt="Random Walk Estimate" style="max-width: 100%;">
+    <img src="assets/rw_est.png" alt="Random Walk Estimate" style="max-width: 25%;">
     <figcaption>Random Walk Estimate</figcaption>
   </figure>
   <figure style="margin: 10px;">
-    <img src="assets/dmala_est.png" alt="DMALA Estimate" style="max-width: 100%;">
+    <img src="assets/dmala_est.png" alt="DMALA Estimate" style="max-width: 25%;">
     <figcaption>DMALA Estimate</figcaption>
   </figure>
   <figure style="margin: 10px;">
-    <img src="assets/acs_est.png" alt="ACS Estimate" style="max-width: 100%;">
+    <img src="assets/acs_est.png" alt="ACS Estimate" style="max-width: 25%;">
     <figcaption>ACS Estimate</figcaption>
   </figure>
 </div>
 
-## How this code-base is organized 
+## Organization 
+This code base is built off of the Discrete Langevin Proposal code-base, which can be found at [this link](https://github.com/ruqizhang/discrete-langevin). 
+
+The core sampler of interest is located in [samplers/acs_samplers.py](samplers/acs_samplers.py). Here we have the core tuning algorithm, along with the calculation of the step-size schedule and balancing-constant schedule. We also include the sampling step function, which is almost the same as in [samplers/dlp_samplers.py](samplers/dlp_samplers.py). 
+
+The tuning algorithm within this class depends on several components from [samplers/tuning_components.py](samplers/tuning_components.py).
+
+## Running Experiments
 All the necessary bash scripts to run experiments are located in /bash_scripts. 
 To run experiments, all that is needed is the following: 
-```
-bash bash_scripts/rbm_sample_all.sh $CUDA_ID_HERE 
-```
-All the experiments assume access to GPUs, as running them otherwise is slightly infeasible. To specify the GPU, pass the GPU ID as an argument to the bash script. 
-
 ```
 bash bash_scripts/get_multi_modal_res.sh # Toy example
 bash bash_scripts/rbm_sample_all.sh $CUDA_ID # RBM Sampling 
