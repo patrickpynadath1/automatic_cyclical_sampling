@@ -8,20 +8,8 @@
 This is the codebase for the 2024 NeurIPS paper "Gradient-based Discrete Sampling with Automatic Cyclical Scheduling". In this code-base, we discuss the problem of multi-modal distributions within the context of gradient-based discrete samplers and propose a novel sampling algorithm, Automatic Cyclical Sampling (ACS), to avoid this pitfall. Below we show various samplers estimate of a highly multi-modal distribution to illustrate this point. 
 <div style="display: flex; justify-content: space-around;">
   <figure style="margin: 10px;">
-    <img src="assets/init_dist.png" alt="Ground Truth Distribution" style="max-width: 25%;">
-    <figcaption>Random Walk Estimate</figcaption>
-  </figure>
-  <figure style="margin: 10px;">
-    <img src="assets/rw_est.png" alt="Random Walk Estimate" style="max-width: 25%;">
-    <figcaption>Random Walk Estimate</figcaption>
-  </figure>
-  <figure style="margin: 10px;">
-    <img src="assets/dmala_est.png" alt="DMALA Estimate" style="max-width: 25%;">
-    <figcaption>DMALA Estimate</figcaption>
-  </figure>
-  <figure style="margin: 10px;">
-    <img src="assets/acs_est.png" alt="ACS Estimate" style="max-width: 25%;">
-    <figcaption>ACS Estimate</figcaption>
+    <img src="assets/main_image.png" alt="Ground Truth Distribution" style="max-width: 100%;">
+    <figcaption>Sampler Performance on Toy Multi-modal Example</figcaption>
   </figure>
 </div>
 
