@@ -8,7 +8,7 @@ sample_steps=1;
 rbm_train_iter=1000;
 n_steps=10000;
 n_hidden=500;
-for data in emnist 
+for data in mnist emnist kmnist caltech omniglot
 do
   python rbm_sample.py \
     --sampler asb \
