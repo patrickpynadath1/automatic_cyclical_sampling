@@ -4,13 +4,13 @@ import torch.distributions as dists
 from tqdm import tqdm
 import igraph as ig
 import numpy as np
-from asbs_code.GBS.model.abstract import BaseModel
+# from asbs_code.GBS.model.abstract import BaseModel
 import torch.nn.functional as F
 
 device = torch.device("cuda:" + str(0) if torch.cuda.is_available() else "cpu")
 
 
-class BernoulliRBM(BaseModel):
+class BernoulliRBM(nn.Module):
     def __init__(self, n_visible, n_hidden, data_mean=None):
         super().__init__(d=n_visible, L=1, device=device)
         linear = nn.Linear(n_visible, n_hidden)
