@@ -239,15 +239,15 @@ def configure_save_dir(args):
     if args.run_name != "":
         save_dir += f"_{args.run_name}"
         if not os.path.exists(save_dir):
-            os.mkdir(save_dir)
+            os.makedirs(save_dir)
     else:
         counter = 1
         while os.path.exists(f"{save_dir}_{counter}"):
             counter += 1
         save_dir = f"{save_dir}_{counter}"
-        os.mkdir(save_dir)
-        os.mkdir(f"{save_dir}/dmala")
-        os.mkdir(f"{save_dir}/acs")
+        os.makedirs(save_dir)
+        os.makedirs(f"{save_dir}/dmala")
+        os.makedirs(f"{save_dir}/acs")
     return save_dir
 
 
