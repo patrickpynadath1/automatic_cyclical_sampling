@@ -6,6 +6,45 @@ import pickle
 import os
 import yaml
 import tqdm
+from nltk.util import bigrams, trigrams, everygrams
+import evaluate
+
+
+def compute_self_bleu_hf(sentences: List[str], n_gram: int = 4) -> float:
+    """
+    Compute Self-BLEU using Hugging Face's evaluate library.
+    Args:
+        sentences: list of text strings
+        n_gram: BLEU n-gram order
+    Returns:
+        Mean Self-BLEU score
+    """
+    bleu_metric = evaluate.load("bleu")
+    scores = []
+
+    for i in range(len(sentences)):
+        hypothesis = sentences[i]
+        references = sentences[:i] + sentences[i+1:]
+        result = bleu_metric.compute(predictions=[hypothesis], references=[references], max_order=n_gram)
+        scores.append(result["bleu"])
+
+    return float(np.mean(scores))
+
+def get_unique_ngram(grouped_sentences, n): 
+    total_n_grams = 0
+    unique_n_grams = []
+    for i in range(len(grouped_sentences)):
+        cur_group = grouped_sentences[i]
+        for j in range(len(cur_group)):
+            candidate = word_tokenize(cur_group[j].replace("<s> ", "").replace("</s>", ""))
+            n_grams = list(everygrams(candidate, min_len=n, max_len=n))
+            for gram in n_grams: 
+                if gram not in unique_n_grams: 
+                    unique_n_grams.append(gram)
+            total_n_grams += len(list(n_grams))
+    return len(unique_n_grams)/total_n_grams
+
+
 
 
 def generate_text_samples(
@@ -49,7 +88,7 @@ def generate_text_samples(
                 for i in range(outputs['acs'].shape[0]):
                     final_text = tokenizer.decode(outputs[sampler_name][i].long())
                     generated_samples[sampler_name][data_idx].append(final_text)
-                    print(final_text)
+                    # print(final_text)
         except Exception as e:
             print(f"Error: {e}")
     # run sampling loop, collect generated samples
@@ -148,10 +187,10 @@ def run_evaluation_loop(
             "self_bleu": self_bleu_scores,
         },
     }
-    for key, value in data_res["baseline_data"].items():
-        print(f"Baseline {key}: {value}")
-    for key, value in data_res["generated_data"].items():
-        print(f"Generated {key}: {value}")
+    # for key, value in data_res["baseline_data"].items():
+    #     print(f"Baseline {key}: {value}")
+    # for key, value in data_res["generated_data"].items():
+    #     print(f"Generated {key}: {value}")
 
     # with open(f"{save_dir}/evaluation_res.pickle", "wb") as f:
     #     pickle.dump(data_res, f)
@@ -395,6 +434,59 @@ def main(args):
         for ex in generated_samples['acs']: 
             for text in ex:
                 f.write(text + "\n")
+
+    dmala_eval_res = data_res_dmala
+    acs_eval_res = data_res_acs
+    num_samples = args.samples_per_example
+    num_examples = args.examples
+    ### Printing out the results for top-k
+    # loading cola scores
+
+    dmala_cola_total_scores = np.stack(dmala_eval_res['generated_data']['cola_logits']).squeeze()[:, 1]
+    dmala_cola_total_scores = dmala_cola_total_scores.reshape((num_examples, num_samples))
+    acs_cola_total_scores = np.stack(acs_eval_res['generated_data']['cola_logits']).squeeze()[:, 1]
+    acs_cola_total_scores = acs_cola_total_scores.reshape((num_examples, num_samples))
+
+    # loading perplexities
+    baseline_perp_total_scores = np.stack(dmala_eval_res['baseline_data']['perplexities']).squeeze()
+    dmala_perp_total_scores = np.stack(dmala_eval_res['generated_data']['perplexities']).squeeze()
+    acs_perp_total_scores = np.stack(acs_eval_res['generated_data']['perplexities']).squeeze()
+
+
+    # loading self bleu
+    dmala_sbleu_total_scores = np.stack(dmala_eval_res['generated_data']['self_bleu']).squeeze()
+    acs_sbleu_total_scores = np.stack(acs_eval_res['generated_data']['self_bleu']).squeeze()
+
+    # applying top k, k = 5 to do the analysis on 
+    # this is typical practice for non autoregressive text generation
+
+    k = 5
+    indices_to_use_dmala = dmala_perp_total_scores.argsort(axis=1)[:, :k]
+    indices_to_use_acs = acs_perp_total_scores.argsort(axis=1)[:, :k]
+
+    # topk metrics 
+    batch_idx = np.arange(num_examples)[:, None]
+    dmala_cola_topk = dmala_cola_total_scores[batch_idx, indices_to_use_dmala]
+    acs_cola_topk = acs_cola_total_scores[batch_idx, indices_to_use_acs]
+
+    dmala_perp_topk = dmala_perp_total_scores[batch_idx, indices_to_use_dmala]
+    acs_perp_topk = acs_perp_total_scores[batch_idx, indices_to_use_acs]
+
+    dmala_sbleu_topk = dmala_sbleu_total_scores[batch_idx, indices_to_use_dmala]
+    acs_sbleu_topk = acs_sbleu_total_scores[batch_idx, indices_to_use_acs]
+
+    print(f"DMALA Cola Top-K: {dmala_cola_topk.mean():.4f} ± {dmala_cola_topk.std():.4f}")
+    print(f"ACS Cola Top-K: {acs_cola_topk.mean():.4f} ± {acs_cola_topk.std():.4f}")
+
+    print(f"DMALA Perplexity Top-K: {dmala_perp_topk.mean():.4f} ± {dmala_perp_topk.std():.4f}")
+    print(f"ACS Perplexity Top-K: {acs_perp_topk.mean():.4f} ± {acs_perp_topk.std():.4f}")
+
+    print(f"DMALA Self-BLEU Top-K: {dmala_sbleu_topk.mean():.4f} ± {dmala_sbleu_topk.std():.4f}")
+    print(f"ACS Self-BLEU Top-K: {acs_sbleu_topk.mean():.4f} ± {acs_sbleu_topk.std():.4f}")
+
+
+
+
 
 if __name__ == "__main__":
     parser = ArgumentParser()
